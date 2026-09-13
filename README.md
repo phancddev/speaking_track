@@ -27,6 +27,7 @@ through a short-lived presigned URL on `S3_PUBLIC_DOMAIN`.
 - Saved recordings live in MinIO permanently and are immediately playable in the app via short-lived presigned GET URLs (`PRESIGNED_PLAYBACK_TTL_SECONDS`, default 3600) — playback never depends on YouTube.
 - The worker's scanner (`YOUTUBE_SCAN_INTERVAL_SECONDS`, default 300) periodically uploads recordings that are still `QUEUED`. On `YOUTUBE_QUOTA_EXCEEDED` the recording returns to `QUEUED` with an upload deferral past the next midnight-Pacific quota reset; the scanner picks it up again automatically. Nothing is lost and the video stays playable while it waits.
 - Attempt rows show recording size next to duration.
+- YouTube is **per user**: each user enters their own Google OAuth client ID/secret on Settings → YouTube (stored encrypted), then connects their own Google account. Recordings upload to that user's own channel and quota is tracked by that user's Google Cloud project. `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` in the environment are only a shared fallback for users without saved credentials.
 
 ## Quick start (local, production-shaped)
 

@@ -21,6 +21,11 @@ services:
       # LAN dual-protocol mode (see Caddyfile http:// site block).
       APP_EXTRA_ORIGINS: ${APP_EXTRA_ORIGINS:-}
       AUTH_INSECURE_COOKIES: ${AUTH_INSECURE_COOKIES:-}
+      # Encrypts per-user OAuth client secrets and refresh tokens at rest.
+      YOUTUBE_TOKEN_ENCRYPTION_KEY: ${YOUTUBE_TOKEN_ENCRYPTION_KEY:?set YOUTUBE_TOKEN_ENCRYPTION_KEY in .env}
+      # Shared-client fallback (users normally save their own on the web).
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:?set S3_PUBLIC_ENDPOINT in .env}
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET in .env}
@@ -68,6 +73,13 @@ services:
       MAX_STAGING_BYTES: ${MAX_STAGING_BYTES:-107374182400}
       TEMP_UPLOAD_RETENTION_HOURS: ${TEMP_UPLOAD_RETENTION_HOURS:-48}
       S3_INTERNAL_ENDPOINT: ${S3_INTERNAL_ENDPOINT:-http://minio:9000}
+      # Per-user model: worker reads each user's stored OAuth client from the
+      # database; these env values are only the shared fallback.
+      YOUTUBE_TOKEN_ENCRYPTION_KEY: ${YOUTUBE_TOKEN_ENCRYPTION_KEY:?set YOUTUBE_TOKEN_ENCRYPTION_KEY in .env}
+      YOUTUBE_SCAN_INTERVAL_SECONDS: ${YOUTUBE_SCAN_INTERVAL_SECONDS:-300}
+      YOUTUBE_UPLOAD_CONCURRENCY: ${YOUTUBE_UPLOAD_CONCURRENCY:-1}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       WORKER_HEARTBEAT_FILE: /tmp/worker-heartbeat
     depends_on:
       postgres:

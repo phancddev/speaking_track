@@ -91,7 +91,7 @@ One explicit `PUT` upserts the complete draft. Initial scope has no draft revisi
 
 `ownerId` is copied from the owning topic at recording creation to make authorization and storage prefixing direct. A database constraint/service invariant prevents a mismatch.
 
-### `youtubeConnections`
+### `youtubeConnections` (per user; `id` = user id, paired with `youtubeOauthClients` storing each user's web-entered Google OAuth client credentials)
 
 Single logical row for the installation:
 
