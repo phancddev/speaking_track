@@ -14,7 +14,6 @@ import {
   topics,
   user as userTable,
   youtubeConnections,
-  SINGLETON_YOUTUBE_CONNECTION_ID,
   type Db,
 } from "@speaking-track/db"
 import { createWorkerServices, type WorkerServices } from "../src/services"
@@ -264,7 +263,7 @@ beforeAll(async () => {
   await db.insert(topics).values({ id: topicId, ownerId, title: "Worker test topic" })
   await db.insert(questions).values({ id: QUESTION_ID, topicId, prompt: "Prompt", position: 0 })
   await db.insert(youtubeConnections).values({
-    id: SINGLETON_YOUTUBE_CONNECTION_ID,
+    id: ownerId, // per-user connection: id = owner
     channelId: "chan-1",
     channelTitle: "Fake Channel",
     encryptedRefreshToken: serializeEnvelope(encryptSecret("fake-refresh-token", ENCRYPTION_KEY)),

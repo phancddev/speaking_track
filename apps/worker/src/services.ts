@@ -6,6 +6,7 @@ import {
   insertOutboxEvent,
   recordings,
   youtubeConnections,
+  youtubeOauthClients,
   type Db,
 } from "@speaking-track/db"
 import { createOutboxEventPublisher, createQueueProducer } from "@speaking-track/queue"
@@ -77,8 +78,11 @@ export function createWorkerServices(input: {
     }),
   )
 
-  async function loadYoutubeClient(): Promise<YoutubeClient> {
-    const [connection] = await db.select().from(youtubeConnections).limit(1)
+  async function loadYoutubeClient(userId: string): Promise<YoutubeClient> {
+    const [connection] = await db
+      .select()
+      .from(youtubeConnections)
+      .where(eq(youtubeConnections.id, userId))
     if (!connection || connection.status === "DISCONNECTED") {
       throw new AppError("YOUTUBE_NOT_CONNECTED", "No YouTube channel is connected.")
     }
@@ -87,9 +91,19 @@ export function createWorkerServices(input: {
       parseEnvelope(connection.encryptedRefreshToken),
       youtubeTokenEncryptionKey(),
     )
+    // Per-user OAuth client credentials from the settings page; the env
+    // pair is the fallback for shared-client deployments.
+    const [client] = await db
+      .select()
+      .from(youtubeOauthClients)
+      .where(eq(youtubeOauthClients.userId, userId))
+    const clientId = client?.clientId ?? input.env.GOOGLE_CLIENT_ID ?? ""
+    const clientSecret = client
+      ? decryptSecret(parseEnvelope(client.encryptedClientSecret), youtubeTokenEncryptionKey())
+      : (input.env.GOOGLE_CLIENT_SECRET ?? "")
     const tokens = tokenSourceFromRefreshToken({
-      clientId: input.env.GOOGLE_CLIENT_ID ?? "",
-      clientSecret: input.env.GOOGLE_CLIENT_SECRET ?? "",
+      clientId,
+      clientSecret,
       refreshToken,
       tokenTransport: input.tokenTransport,
     })
@@ -176,21 +190,21 @@ export function createWorkerServices(input: {
 export type UploadContext = {
   db: Db
   storage: StorageClient
-  loadYoutubeClient: () => Promise<YoutubeClient>
+  loadYoutubeClient: (userId: string) => Promise<YoutubeClient>
   recordingId: string
   producer: ReturnType<typeof createQueueProducer>
 }
 
 export type PollContext = {
   db: Db
-  loadYoutubeClient: () => Promise<YoutubeClient>
+  loadYoutubeClient: (userId: string) => Promise<YoutubeClient>
   recordingId: string
   producer: ReturnType<typeof createQueueProducer>
 }
 
 export type DeleteContext = {
   db: Db
-  loadYoutubeClient: () => Promise<YoutubeClient>
+  loadYoutubeClient: (userId: string) => Promise<YoutubeClient>
   recordingId: string
 }
 

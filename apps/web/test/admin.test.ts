@@ -112,7 +112,7 @@ async function routeTable(): Promise<Record<string, RouteHandler>> {
   const usersRoute = await import("@/app/api/admin/users/route")
   const userItemRoute = await import("@/app/api/admin/users/[userId]/route")
   const setPasswordRoute = await import("@/app/api/admin/users/[userId]/set-password/route")
-  const youtubeRoute = await import("@/app/api/admin/youtube/[...action]/route")
+  const youtubeRoute = await import("@/app/api/admin/youtube/connections/route")
   const queueRoute = await import("@/app/api/admin/queue/[...action]/route")
   const topicsRoute = await import("@/app/api/topics/route")
   const topicItemRoute = await import("@/app/api/topics/[topicId]/route")
@@ -123,7 +123,7 @@ async function routeTable(): Promise<Record<string, RouteHandler>> {
     "PATCH /api/admin/users/:id": userItemRoute.PATCH as RouteHandler,
     "DELETE /api/admin/users/:id": userItemRoute.DELETE as RouteHandler,
     "POST /api/admin/users/:id/set-password": setPasswordRoute.POST as RouteHandler,
-    "GET /api/admin/youtube/status": youtubeRoute.GET as RouteHandler,
+    "GET /api/admin/youtube/connections": youtubeRoute.GET as RouteHandler,
     "GET /api/admin/queue/summary": queueRoute.GET as RouteHandler,
     "GET /api/admin/queue/failures": queueRoute.GET as RouteHandler,
     "GET /api/topics": topicsRoute.GET as RouteHandler,
@@ -172,7 +172,7 @@ describe("admin API role gate", () => {
   it("rejects a normal user from every admin endpoint", async () => {
     for (const path of [
       "/api/admin/users",
-      "/api/admin/youtube/status",
+      "/api/admin/youtube/connections",
       "/api/admin/queue/summary",
       "/api/admin/queue/failures",
     ]) {
@@ -404,10 +404,11 @@ describe("queue and youtube admin views", () => {
     )
   })
 
-  it("reports the youtube connection as unconnected by default", async () => {
-    const result = await api(adminCookie, "/api/admin/youtube/status")
+  it("lists per-user youtube connections (empty by default)", async () => {
+    const result = await api(adminCookie, "/api/admin/youtube/connections")
     expect(result.status).toBe(200)
-    const data = result.body.data as { status: string }
-    expect(["UNCONNECTED", "NOT_CONFIGURED", "DISCONNECTED"]).toContain(data.status)
+    const data = result.body.data as { connections: unknown[] }
+    expect(Array.isArray(data.connections)).toBe(true)
+    expect(JSON.stringify(result.body)).not.toMatch(/encryptedRefreshToken|clientSecret/)
   })
 })

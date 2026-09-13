@@ -42,8 +42,9 @@ type NavItem = {
 
 const NAV_ITEMS: NavItem[] = [
   { href: "/library", label: "Library", icon: LibraryIcon },
+  { href: "/settings/youtube", label: "YouTube", icon: VideoIcon },
   { href: "/admin/users", label: "Users", icon: UsersIcon, adminOnly: true },
-  { href: "/admin/youtube", label: "YouTube", icon: VideoIcon, adminOnly: true },
+  { href: "/admin/youtube", label: "Connections", icon: UsersIcon, adminOnly: true },
   { href: "/admin/queue", label: "Queue", icon: ListVideoIcon, adminOnly: true },
 ]
 

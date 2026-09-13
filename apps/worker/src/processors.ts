@@ -154,7 +154,7 @@ export async function handleUpload(ctx: UploadContext): Promise<void> {
   }
 
   try {
-    const youtube = await ctx.loadYoutubeClient()
+    const youtube = await ctx.loadYoutubeClient(recording.ownerId)
     const title = `Speaking practice ${recording.createdAt.toISOString().slice(0, 10)}`
     // No draft text in metadata — only a stable, policy-safe reference.
     const description = "Private speaking practice recording."
@@ -339,7 +339,7 @@ export async function handlePollProcessing(ctx: PollContext): Promise<void> {
     return
   }
   try {
-    const youtube = await ctx.loadYoutubeClient()
+    const youtube = await ctx.loadYoutubeClient(recording.ownerId)
     const status = await youtube.getVideoStatus(recording.youtubeVideoId)
     if (
       status.uploadStatus === "processed" &&
@@ -430,7 +430,7 @@ export async function handleDelete(ctx: DeleteContext): Promise<void> {
   const recording = await getRecording(db, ctx.recordingId)
   if (!recording || !recording.youtubeVideoId) return
   try {
-    const youtube = await ctx.loadYoutubeClient()
+    const youtube = await ctx.loadYoutubeClient(recording.ownerId)
     const result = await youtube.deleteVideo(recording.youtubeVideoId)
     // 404 (already gone) counts as success when deletion was intended.
     if (result.status !== 204 && result.status !== 404) {
