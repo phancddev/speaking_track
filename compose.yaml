@@ -18,6 +18,9 @@ services:
       REDIS_URL: ${REDIS_URL:?set REDIS_URL in .env}
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET in .env}
       BETTER_AUTH_URL: ${BETTER_AUTH_URL:?set BETTER_AUTH_URL in .env}
+      # LAN dual-protocol mode (see Caddyfile http:// site block).
+      APP_EXTRA_ORIGINS: ${APP_EXTRA_ORIGINS:-}
+      AUTH_INSECURE_COOKIES: ${AUTH_INSECURE_COOKIES:-}
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:?set S3_PUBLIC_ENDPOINT in .env}
       S3_REGION: ${S3_REGION:-us-east-1}
       S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET in .env}
@@ -167,6 +170,9 @@ services:
       # in .env; HTTPS verification via https://localhost is unaffected.
       - "${CADDY_HTTP_PORT:-80}:80"
       - "${CADDY_HTTPS_PORT:-443}:443"
+      # Browser-reachable MinIO endpoint for presigned operations on the LAN
+      # (separate port so web and S3 can share one IP without SNI games).
+      - "${CADDY_S3_PORT:-8443}:8443"
     environment:
       WEB_DOMAIN: ${WEB_DOMAIN:-localhost}
       S3_PUBLIC_DOMAIN: ${S3_PUBLIC_DOMAIN:?set S3_PUBLIC_DOMAIN in .env}

@@ -19,11 +19,18 @@ const WEB_ENV_SCHEMA = z.object({
     .refine((v) => v.startsWith("redis")),
   BETTER_AUTH_SECRET: z.string().min(32),
   BETTER_AUTH_URL: z.string().url(),
+  // Optional additional trusted origins (comma-separated), for deployments
+  // reachable over both HTTPS and plain HTTP on the LAN.
+  APP_EXTRA_ORIGINS: z.string().optional(),
+  // LAN dual-protocol mode: issue session cookies without the Secure flag
+  // so they also work over plain HTTP. Leave unset for HTTPS-only deploys.
+  AUTH_INSECURE_COOKIES: z.string().optional(),
 })
-
 export type WebConfig = {
   nodeEnv: "development" | "test" | "production"
   appOrigin: string
+  extraOrigins: string[]
+  insecureCookies: boolean
   databaseUrl: string
   redisUrl: string
   betterAuthSecret: string
@@ -40,6 +47,13 @@ export function createWebConfig(env: Record<string, string | undefined>): WebCon
   return {
     nodeEnv: parsed.data.NODE_ENV,
     appOrigin: parsed.data.APP_ORIGIN,
+    extraOrigins: (parsed.data.APP_EXTRA_ORIGINS ?? "")
+      .split(",")
+      .map((origin) => origin.trim())
+      .filter((origin) => origin.length > 0 && /^https?:\/\//.test(origin)),
+    insecureCookies: ["1", "true", "yes"].includes(
+      (parsed.data.AUTH_INSECURE_COOKIES ?? "").toLowerCase(),
+    ),
     databaseUrl: parsed.data.DATABASE_URL,
     redisUrl: parsed.data.REDIS_URL,
     betterAuthSecret: parsed.data.BETTER_AUTH_SECRET,

@@ -17,19 +17,31 @@ import { getDb } from "@/lib/db"
  */
 export type AppAuth = ReturnType<typeof createAuth>
 
-export function createAuth(db: Db, options: { appOrigin: string; secret: string }) {
+export function createAuth(
+  db: Db,
+  options: {
+    appOrigin: string
+    extraOrigins?: string[]
+    insecureCookies?: boolean
+    secret: string
+  },
+) {
   return betterAuth({
     database: drizzleAdapter(db, { provider: "pg", schema: authTables }),
     secret: options.secret,
-    trustedOrigins: [options.appOrigin],
+    trustedOrigins: [options.appOrigin, ...(options.extraOrigins ?? [])],
     advanced: {
       // The web container sits behind Caddy, which sets x-forwarded-for;
       // rate limiting keys on the real client address instead of one shared
       // fallback bucket.
       ipAddress: { ipAddressHeaders: ["x-forwarded-for"] },
       // UUID ids everywhere: recording object keys and admin-browsing query
-      // parameters assume UUID-shaped user/session ids.
+      // parameters assume UUID-shaped user ids.
       generateId: () => randomUUID(),
+      // LAN dual-protocol deployments (HTTPS + plain HTTP) need cookies that
+      // the browser also sends over HTTP; HTTPS-only deployments leave this
+      // unset and keep Secure cookies.
+      ...(options.insecureCookies ? { useSecureCookies: false } : {}),
     },
     emailAndPassword: {
       enabled: true,
@@ -80,12 +92,17 @@ export function createAuth(db: Db, options: { appOrigin: string; secret: string 
 
 /** Shared process-wide auth instance. */
 export function getAuth() {
-  const globalStore = globalThis as { __speakingTrackAuth?: ReturnType<typeof createAuth> }
+  const globalStore = globalThis as { __speakingTrackAuth?: AppAuth }
   if (globalStore.__speakingTrackAuth) {
     return globalStore.__speakingTrackAuth
   }
   const config = createWebConfig(process.env)
-  const auth = createAuth(getDb(), { appOrigin: config.appOrigin, secret: config.betterAuthSecret })
+  const auth = createAuth(getDb(), {
+    appOrigin: config.appOrigin,
+    extraOrigins: config.extraOrigins,
+    insecureCookies: config.insecureCookies,
+    secret: config.betterAuthSecret,
+  })
   globalStore.__speakingTrackAuth = auth
   return auth
 }

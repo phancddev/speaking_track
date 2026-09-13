@@ -12,8 +12,22 @@
 # obtains public ACME certificates automatically. Never edit this file per
 # environment.
 
+{
+	# Browsers omit SNI for IP-literal addresses; without a default the TLS
+	# handshake has no certificate to offer and fails with an internal error.
+	default_sni {$WEB_DOMAIN:localhost}
+}
+
 https://{$WEB_DOMAIN:localhost} {
-	reverse_proxy web:3000
+	# One-shot download of Caddy's local root CA so LAN clients can trust
+	handle /lan-root.crt {
+		root * /data/caddy/pki/authorities/local
+		rewrite * /root.crt
+		file_server
+	}
+	handle {
+		reverse_proxy web:3000
+	}
 
 	header {
 		# Baseline security headers.
@@ -22,6 +36,25 @@ https://{$WEB_DOMAIN:localhost} {
 		X-Frame-Options "SAMEORIGIN"
 		Referrer-Policy "strict-origin-when-cross-origin"
 		# Camera/microphone are required by this application itself only.
+		Permissions-Policy "camera=(self), microphone=(self)"
+		-Server
+	}
+}
+
+# Plain-HTTP mirror of the web app for LAN deployments that accept
+# unencrypted browsing (APP_EXTRA_ORIGINS + AUTH_INSECURE_COOKIES in .env).
+# Defining the http:// site explicitly also disables the automatic
+# HTTP->HTTPS redirect. Camera capture still requires HTTPS; uploads and
+# playback presign for the HTTPS S3 endpoint, so those stay on HTTPS.
+http://{$WEB_DOMAIN:localhost} {
+	handle {
+		reverse_proxy web:3000
+	}
+
+	header {
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
 		Permissions-Policy "camera=(self), microphone=(self)"
 		-Server
 	}
