@@ -51,17 +51,23 @@ export async function trimRecording(
   ffmpeg.on("progress", progressHandler)
   await ffmpeg.writeFile(input, new Uint8Array(await blob.arrayBuffer()))
   try {
-    // -c copy cuts at keyframes around the requested bounds, which is
-    // instant and lossless; the player reports the snapped duration.
+    // Keyframe-accurate stream copy with INPUT-side seeking: the output
+    // then starts at a real keyframe and -avoid_negative_ts resets packet
+    // timestamps to zero. (Output-side -ss with -c copy produced files that
+    // started mid-GOP with offset timestamps, which YouTube rejects with
+    // "processing abandoned".)
+    const duration = Math.max(0.1, endSec - startSec)
     await ffmpeg.exec([
-      "-i",
-      input,
       "-ss",
       startSec.toFixed(3),
-      "-to",
-      endSec.toFixed(3),
+      "-i",
+      input,
+      "-t",
+      duration.toFixed(3),
       "-c",
       "copy",
+      "-avoid_negative_ts",
+      "make_zero",
       output,
     ])
     const data = (await ffmpeg.readFile(output)) as Uint8Array

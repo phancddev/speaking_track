@@ -45,11 +45,17 @@ export type QueueProducer = {
   connect(): Promise<void>
   /**
    * Validates the payload against the shared schema for `jobName` and adds
-   * it to the contract queue. Recording-scoped jobs always reuse their
-   * deterministic job ID, so duplicate publishes collapse into one job.
+   * it to the contract queue. Recording-scoped jobs reuse their deterministic
+   * job ID so duplicate publishes collapse into one job; pass `scope` (the
+   * outbox event id) so SUCCESSIVE intents for the same recording get fresh
+   * jobs instead of collapsing into retained completed ones.
    */
-  publish(jobName: JobName, payload: RecordingJob | EmptyJob): Promise<PublishResult>
-  /** Closes both queues and the Redis connection. */
+  publish(
+    jobName: JobName,
+    payload: RecordingJob | EmptyJob,
+    options?: { scope?: string },
+  ): Promise<PublishResult>
+  /** Closes both queues and the underlying Redis connection. */
   close(): Promise<void>
 }
 
@@ -77,12 +83,12 @@ export function createQueueProducer(config: RedisConfig): QueueProducer {
       }
       connected = true
     },
-    async publish(jobName, payload) {
+    async publish(jobName, payload, options) {
       const payloadSchema = JOB_PAYLOAD_SCHEMAS[jobName]
       const parsed = payloadSchema.parse(payload)
       const recordingJob = RecordingJobSchema.safeParse(parsed)
       const contractJobId = recordingJob.success
-        ? deterministicJobId(jobName, recordingJob.data.recordingId)
+        ? deterministicJobId(jobName, recordingJob.data.recordingId, options?.scope)
         : null
 
       const queue = queues[JOB_QUEUE[jobName]]
@@ -112,11 +118,19 @@ export function createQueueProducer(config: RedisConfig): QueueProducer {
  */
 export function createOutboxEventPublisher(
   producer: QueueProducer,
-): (event: { type: JobName; payload: unknown }) => Promise<void> {
+): (event: { id?: string; type: JobName; payload: unknown }) => Promise<void> {
   return async (event) => {
     const payloadSchema = JOB_PAYLOAD_SCHEMAS[event.type]
     const parsed = payloadSchema.parse(event.payload)
     const recordingJob = RecordingJobSchema.safeParse(parsed)
-    await producer.publish(event.type, recordingJob.success ? recordingJob.data : ({} as EmptyJob))
+    await producer.publish(
+      event.type,
+      recordingJob.success ? recordingJob.data : ({} as EmptyJob),
+      {
+        // One BullMQ job per outbox EVENT: successive intents (re-polls,
+        // retries) must not collapse into retained completed jobs.
+        scope: event.id,
+      },
+    )
   }
 }

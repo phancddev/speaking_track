@@ -27,17 +27,29 @@ export function storageCleanupJobId(recordingId: string): string {
   return `${STORAGE_CLEANUP_JOB_ID_PREFIX}:${recordingId}`
 }
 
-/** Deterministic ID for a recording-scoped job; null for maintenance jobs. */
-export function deterministicJobId(jobName: JobName, recordingId: string): string | null {
+/**
+ * Deterministic ID for a recording-scoped job; null for maintenance jobs.
+ *
+ * `scope` distinguishes SUCCESSIVE intents for the same recording (each
+ * outbox event carries one). Without it, a follow-up intent (poll
+ * re-poll, retry) would collapse into the previous COMPLETED job that
+ * BullMQ still retains (removeOnComplete.age) and never run.
+ */
+export function deterministicJobId(
+  jobName: JobName,
+  recordingId: string,
+  scope?: string,
+): string | null {
+  const suffix = scope === undefined ? "" : `#${scope}`
   switch (jobName) {
     case "youtube.upload":
-      return youtubeUploadJobId(recordingId)
+      return `${youtubeUploadJobId(recordingId)}${suffix}`
     case "youtube.poll-processing":
-      return youtubePollProcessingJobId(recordingId)
+      return `${youtubePollProcessingJobId(recordingId)}${suffix}`
     case "youtube.delete":
-      return youtubeDeleteJobId(recordingId)
+      return `${youtubeDeleteJobId(recordingId)}${suffix}`
     case "storage.cleanup":
-      return storageCleanupJobId(recordingId)
+      return `${storageCleanupJobId(recordingId)}${suffix}`
     default:
       return null
   }
@@ -52,13 +64,14 @@ export function deterministicJobId(jobName: JobName, recordingId: string): strin
  * distinct contract IDs always map to distinct BullMQ IDs.
  */
 export function toBullmqJobId(contractJobId: string): string {
-  return contractJobId.replaceAll(":", "-")
+  // `#` (event scope) joins the suffix; both `:` and `#` are unsafe in
+  // BullMQ keys, so map them both.
+  return contractJobId.replaceAll(":", "-").replaceAll("#", "_")
 }
 
 /** Inverse of {@link toBullmqJobId} for contract IDs handed back by BullMQ. */
 export function fromBullmqJobId(bullmqJobId: string): string {
-  return bullmqJobId.replace(
-    /^(youtube-upload|youtube-poll|youtube-delete|storage-cleanup)-/,
-    "$1:",
-  )
+  return bullmqJobId
+    .replace(/^(youtube-upload|youtube-poll|youtube-delete|storage-cleanup)-/, "$1:")
+    .replace(/_(?=[0-9a-f-]{8,}$)/, "#")
 }
