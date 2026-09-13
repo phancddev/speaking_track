@@ -405,7 +405,7 @@ function RecorderPanel({
 
         {recorder.permission === "granted" && !capture ? (
           <div className="flex flex-col gap-3">
-            {recorder.stream && !recorder.recording ? (
+            {recorder.stream ? (
               <video
                 muted
                 playsInline
@@ -613,8 +613,13 @@ function AttemptsPanel({
         ) : (
           <ul className="flex flex-col gap-3">
             {recordings.map((row) => (
-              <li key={row.id} className="rounded-md border p-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
+              <li key={row.id} className="flex flex-col gap-2 rounded-md border p-3 sm:flex-row">
+                <AttemptThumbnail
+                  recordingId={row.id}
+                  youtubeVideoId={row.youtubeVideoId}
+                  createdAt={row.createdAt}
+                />
+                <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge
                       variant={
@@ -712,6 +717,77 @@ function AttemptsPanel({
         </p>
       </CardContent>
     </Card>
+  )
+}
+
+function AttemptThumbnail({
+  recordingId,
+  youtubeVideoId,
+  createdAt,
+}: {
+  recordingId: string
+  youtubeVideoId: string | null
+  createdAt: string
+}) {
+  // YouTube thumbnails are a pure function of the video id — derive them
+  // directly instead of setting them inside the effect.
+  const youtubeSrc = youtubeVideoId
+    ? `https://i.ytimg.com/vi/${youtubeVideoId}/mqdefault.jpg`
+    : null
+  const [capturedSrc, setCapturedSrc] = useState<string | null>(null)
+  const src = youtubeSrc ?? capturedSrc
+
+  useEffect(() => {
+    if (youtubeSrc) return
+    // Not on YouTube (yet): capture a frame from the stored video.
+    let cancelled = false
+    void (async () => {
+      try {
+        const result = await apiFetch<{ url: string }>(`/api/recordings/${recordingId}/playback`)
+        const video = document.createElement("video")
+        video.muted = true
+        video.preload = "auto"
+        video.src = result.url
+        await new Promise<void>((resolve, reject) => {
+          video.onloadeddata = () => resolve()
+          video.onerror = () => reject(new Error("thumbnail load failed"))
+        })
+        const target = Math.min(1, (video.duration || 2) / 2)
+        await new Promise<void>((resolve) => {
+          video.onseeked = () => resolve()
+          video.currentTime = target
+        })
+        const canvas = document.createElement("canvas")
+        canvas.width = 320
+        canvas.height = Math.round((320 / (video.videoWidth || 320)) * (video.videoHeight || 180))
+        canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height)
+        if (!cancelled) setCapturedSrc(canvas.toDataURL("image/jpeg", 0.7))
+      } catch {
+        // Thumbnails are decorative; failures just render the placeholder.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [recordingId, youtubeVideoId])
+
+  return (
+    <div
+      className="bg-muted relative aspect-video w-full shrink-0 overflow-hidden rounded-md sm:w-40"
+      aria-hidden
+    >
+      {src ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={src} alt="" className="h-full w-full object-cover" />
+      ) : (
+        <div className="text-muted-foreground flex h-full items-center justify-center">
+          <VideoIcon aria-hidden className="size-6" />
+        </div>
+      )}
+      <span className="sr-only">
+        Thumbnail for attempt from {new Date(createdAt).toLocaleString()}
+      </span>
+    </div>
   )
 }
 

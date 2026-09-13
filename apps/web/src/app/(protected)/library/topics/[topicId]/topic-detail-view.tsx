@@ -7,6 +7,7 @@ import {
   PencilIcon,
   Trash2Icon,
   UserRoundIcon,
+  VideoIcon,
 } from "lucide-react"
 import Link from "next/link"
 import { useState } from "react"
@@ -177,6 +178,13 @@ export function TopicDetailView({
                   <CardTitle className="flex items-start gap-3 text-base font-medium">
                     <span className="text-muted-foreground tabular-nums">{index + 1}.</span>
                     <span className="flex-1">{question.prompt}</span>
+                    <span
+                      className="text-muted-foreground inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-normal"
+                      title={`${question.recordingCount} recorded video${question.recordingCount === 1 ? "" : "s"}`}
+                    >
+                      <VideoIcon aria-hidden className="size-3.5" />
+                      {question.recordingCount}
+                    </span>
                   </CardTitle>
                   <div className="flex flex-wrap items-center gap-1">
                     <Button

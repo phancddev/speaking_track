@@ -5,6 +5,7 @@ import {
   insertOutboxEvent,
   transitionRecordingStatus,
   recordings,
+  questions,
   youtubeConnections as youtubeConnectionsTable,
   type Recording,
 } from "@speaking-track/db"
@@ -155,10 +156,19 @@ export async function handleUpload(ctx: UploadContext): Promise<void> {
 
   try {
     const youtube = await ctx.loadYoutubeClient(recording.ownerId)
-    const title = `Speaking practice ${recording.createdAt.toISOString().slice(0, 10)}`
-    // No draft text in metadata — only a stable, policy-safe reference.
-    const description = "Private speaking practice recording."
-
+    // Title carries the question prompt (truncated to YouTube's limit);
+    // the description keeps a stable, policy-safe reference with date.
+    const [question] = await db
+      .select({ prompt: questions.prompt, topicId: questions.topicId })
+      .from(questions)
+      .where(eq(questions.id, recording.questionId))
+      .limit(1)
+    const prompt = (question?.prompt ?? "").trim()
+    const title =
+      prompt.length > 0
+        ? prompt.slice(0, 95)
+        : `Speaking practice ${recording.createdAt.toISOString().slice(0, 10)}`
+    const description = `Private speaking practice recording — ${recording.createdAt.toISOString().slice(0, 10)}`
     let sessionUri: string
     if (recording.youtubeUploadSessionUriEncrypted) {
       // Resume a persisted session: query status before sending anything.

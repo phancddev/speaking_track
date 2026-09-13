@@ -8,7 +8,15 @@ import {
   type TopicUpdateInput,
 } from "@speaking-track/contracts"
 import type { Db, DbExecutor } from "@speaking-track/db"
-import { questions, tags, topics, topicTags, type Question, type Topic } from "@speaking-track/db"
+import {
+  questions,
+  recordings,
+  tags,
+  topics,
+  topicTags,
+  type Question,
+  type Topic,
+} from "@speaking-track/db"
 
 /**
  * Topics and questions services (plan/02 § topics/questions, plan/04).
@@ -29,20 +37,20 @@ export type TopicListItem = {
   description: string | null
   tags: { id: string; name: string; color: string | null }[]
   questionCount: number
-  createdAt: Date
-  updatedAt: Date
-}
-
-export type TopicDetail = TopicListItem & {
-  questions: QuestionListItem[]
 }
 
 export type QuestionListItem = {
   id: string
   prompt: string
   position: number
+  /** Non-hidden recordings this question has (task: per-question counts). */
+  recordingCount: number
   createdAt: Date
   updatedAt: Date
+}
+
+export type TopicDetail = TopicListItem & {
+  questions: QuestionListItem[]
 }
 
 export async function listTopics(
@@ -215,12 +223,6 @@ export async function deleteTopic(db: Db, ownerId: string, topicId: string): Pro
   if (result.length === 0) {
     throw new AppError("RESOURCE_NOT_FOUND", "Topic not found.")
   }
-  // Questions hide with their topic via join filters; their soft-delete
-  // stamps are written too so standalone queries stay consistent.
-  await db
-    .update(questions)
-    .set({ deletedAt: new Date(), updatedAt: new Date() })
-    .where(and(eq(questions.topicId, topicId), isNull(questions.deletedAt)))
 }
 
 export async function listQuestions(
@@ -230,7 +232,18 @@ export async function listQuestions(
 ): Promise<QuestionListItem[]> {
   await assertOwnedTopic(db, ownerId, topicId)
   const rows = await db
-    .select()
+    .select({
+      id: questions.id,
+      prompt: questions.prompt,
+      position: questions.position,
+      createdAt: questions.createdAt,
+      updatedAt: questions.updatedAt,
+      recordingCount: sql<number>`(
+        select count(*)::int from ${recordings}
+        where ${recordings.questionId} = ${questions.id}
+          and ${recordings.status} not in ('DELETE_PENDING', 'DELETED', 'EXPIRED')
+      )`,
+    })
     .from(questions)
     .where(and(eq(questions.topicId, topicId), isNull(questions.deletedAt)))
     .orderBy(asc(questions.position), asc(questions.createdAt))
@@ -238,6 +251,7 @@ export async function listQuestions(
     id: row.id,
     prompt: row.prompt,
     position: row.position,
+    recordingCount: row.recordingCount,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   }))
@@ -413,10 +427,13 @@ async function nextPosition(db: DbExecutor, topicId: string): Promise<number> {
 }
 
 function toQuestionView(row: Question): QuestionListItem {
+  // Create/update paths return the bare row; a fresh question has no
+  // recordings yet.
   return {
     id: row.id,
     prompt: row.prompt,
     position: row.position,
+    recordingCount: 0,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   }
