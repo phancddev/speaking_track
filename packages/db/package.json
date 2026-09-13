@@ -1,0 +1,31 @@
+{
+  "name": "@speaking-track/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "node scripts/migrate.mjs",
+    "db:reset": "node scripts/reset.mjs"
+  },
+  "dependencies": {
+    "@speaking-track/contracts": "workspace:*",
+    "drizzle-orm": "0.45.2",
+    "postgres": "3.4.9"
+  },
+  "devDependencies": {
+    "@speaking-track/queue": "workspace:*",
+    "@speaking-track/storage": "workspace:*",
+    "@types/node": "^24.13.4",
+    "dotenv": "17.4.2",
+    "drizzle-kit": "0.31.10",
+    "vitest": "5.0.0"
+  }
+}
