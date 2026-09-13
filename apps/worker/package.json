@@ -1,0 +1,28 @@
+{
+  "name": "@speaking-track/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "build": "esbuild src/main.ts --bundle --platform=node --target=node22 --format=cjs --outfile=dist/main.js --sourcemap",
+    "start": "node dist/main.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.2",
+    "esbuild": "^0.28.2",
+    "vitest": "5.0.0"
+  },
+  "dependencies": {
+    "@speaking-track/contracts": "workspace:*",
+    "@speaking-track/db": "workspace:*",
+    "@speaking-track/queue": "workspace:*",
+    "@speaking-track/storage": "workspace:*",
+    "@speaking-track/youtube": "workspace:*",
+    "bullmq": "6.3.4",
+    "drizzle-orm": "0.45.2",
+    "ioredis": "6.0.0",
+    "postgres": "3.4.9"
+  }
+}
