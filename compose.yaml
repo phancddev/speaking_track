@@ -1,0 +1,194 @@
+name: speaking-track
+
+# Production-shaped local stack. Secrets are NEVER defaulted in this file:
+# every credential is interpolated from the environment (.env, gitignored;
+# see .env.example for names and safe descriptions).
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    environment:
+      NODE_ENV: production
+      APP_ORIGIN: ${APP_ORIGIN:-https://localhost}
+      # In-network URL is derived from the POSTGRES_* credentials; the
+      # DATABASE_URL variable in .env targets host-side tooling (127.0.0.1).
+      DATABASE_URL: postgres://${POSTGRES_USER:?set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB in .env}
+      REDIS_URL: ${REDIS_URL:?set REDIS_URL in .env}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET in .env}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:?set BETTER_AUTH_URL in .env}
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:?set S3_PUBLIC_ENDPOINT in .env}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET in .env}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID in .env}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY in .env}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
+      S3_INTERNAL_ENDPOINT: ${S3_INTERNAL_ENDPOINT:-http://minio:9000}
+      PRESIGNED_UPLOAD_TTL_SECONDS: ${PRESIGNED_UPLOAD_TTL_SECONDS:-900}
+      MAX_RECORDING_BYTES: ${MAX_RECORDING_BYTES:-524288000}
+      MAX_STAGING_BYTES: ${MAX_STAGING_BYTES:-107374182400}
+    expose:
+      - "3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      # Real process liveness: the app must answer its own HTTP health route.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/api/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://${POSTGRES_USER:?set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:?set POSTGRES_DB in .env}
+      REDIS_URL: ${REDIS_URL:?set REDIS_URL in .env}
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:?set S3_PUBLIC_ENDPOINT in .env}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
+      S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET in .env}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID in .env}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY in .env}
+      PRESIGNED_UPLOAD_TTL_SECONDS: ${PRESIGNED_UPLOAD_TTL_SECONDS:-900}
+      MAX_RECORDING_BYTES: ${MAX_RECORDING_BYTES:-524288000}
+      MAX_STAGING_BYTES: ${MAX_STAGING_BYTES:-107374182400}
+      TEMP_UPLOAD_RETENTION_HOURS: ${TEMP_UPLOAD_RETENTION_HOURS:-48}
+      S3_INTERNAL_ENDPOINT: ${S3_INTERNAL_ENDPOINT:-http://minio:9000}
+      WORKER_HEARTBEAT_FILE: /tmp/worker-heartbeat
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      # Real process liveness: the worker refreshes the heartbeat file on an
+      # interval while its event loop is alive; a stale file fails the check.
+      test:
+        - CMD-SHELL
+        - >-
+          node -e "const fs=require('fs');const t=Date.parse(fs.readFileSync('/tmp/worker-heartbeat','utf8').trim());
+          if (!Number.isFinite(t) || Date.now()-t > 30000) process.exit(1);"
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  postgres:
+    image: postgres:18.6-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+    volumes:
+      # PostgreSQL 18+ images manage a versioned data directory under this
+      # mount point (supports pg_upgrade without mount-boundary issues).
+      - postgres_data:/var/lib/postgresql
+    ports:
+      - "127.0.0.1:5432:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    image: redis:8.10.1-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID in .env}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY in .env}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    restart: unless-stopped
+    healthcheck:
+      # Readiness of the S3 API itself, not the console.
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio-bucket-init:
+    # One-shot: create the private staging bucket and explicitly disable
+    # anonymous access. Anonymous list/get must never be enabled.
+    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+    environment:
+      S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET in .env}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID in .env}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY in .env}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        mc alias set local http://minio:9000 "$$S3_ACCESS_KEY_ID" "$$S3_SECRET_ACCESS_KEY"
+        mc mb --ignore-existing "local/$$S3_BUCKET"
+        mc anonymous set none "local/$$S3_BUCKET"
+        echo "bucket $$S3_BUCKET is ready (anonymous access disabled)"
+
+  caddy:
+    image: caddy:2.11.4-alpine
+    ports:
+      # Production defaults: 80/443. Hosts where these are taken (for example
+      # a workstation DNS resolver on :80) override CADDY_HTTP_PORT/CADDY_HTTPS_PORT
+      # in .env; HTTPS verification via https://localhost is unaffected.
+      - "${CADDY_HTTP_PORT:-80}:80"
+      - "${CADDY_HTTPS_PORT:-443}:443"
+    environment:
+      WEB_DOMAIN: ${WEB_DOMAIN:-localhost}
+      S3_PUBLIC_DOMAIN: ${S3_PUBLIC_DOMAIN:?set S3_PUBLIC_DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      # Caddy process check via the local admin API.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  caddy_data:
+  caddy_config:

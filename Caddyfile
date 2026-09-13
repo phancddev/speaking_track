@@ -1,0 +1,41 @@
+# Caddy terminates HTTPS for the web app and the MinIO public endpoint.
+#
+# Local development: WEB_DOMAIN and S3_PUBLIC_DOMAIN default to localhost and
+# s3.localhost. Caddy issues certificates for these from its internal CA
+# (root cert available at /data/caddy/pki/authorities/local/root.crt inside
+# the caddy_data volume; import it into the host/browser trust store for
+# non-curl clients).
+#
+# Production: hostnames are substituted through environment variables ONLY —
+# set WEB_DOMAIN and S3_PUBLIC_DOMAIN in .env (for example
+# WEB_DOMAIN=app.example.com, S3_PUBLIC_DOMAIN=s3.example.com). Caddy then
+# obtains public ACME certificates automatically. Never edit this file per
+# environment.
+
+https://{$WEB_DOMAIN:localhost} {
+	reverse_proxy web:3000
+
+	header {
+		# Baseline security headers.
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Camera/microphone are required by this application itself only.
+		Permissions-Policy "camera=(self), microphone=(self)"
+		-Server
+	}
+}
+
+https://{$S3_PUBLIC_DOMAIN:s3.localhost} {
+	# Browser-reachable endpoint for presigned S3 operations. The original
+	# Host header is preserved so signatures stay valid; presigned URLs must
+	# always be signed for this public hostname, never for the internal
+	# minio:9000 endpoint.
+	reverse_proxy minio:9000
+
+	header {
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+}
