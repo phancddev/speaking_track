@@ -6,6 +6,7 @@ import {
   LoaderCircleIcon,
   MicIcon,
   PlayIcon,
+  ScissorsIcon,
   Trash2Icon,
   RotateCcwIcon,
   VideoIcon,
@@ -17,6 +18,7 @@ import type { RecordingState } from "@speaking-track/contracts"
 import { apiFetch, ApiError } from "@/lib/api-client"
 import { useRecorderController } from "@/lib/media/use-recorder-controller"
 import { uploadRecordingBlob } from "@/lib/media/upload-transport"
+import { trimRecording } from "@/lib/media/trim"
 import type { RecordingView } from "@/lib/services/recordings"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -110,6 +112,8 @@ export function PracticeWorkspace({
   const [uploading, setUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [uploadError, setUploadError] = useState<string | null>(null)
+  const [trimming, setTrimming] = useState(false)
+  const [trimError, setTrimError] = useState<string | null>(null)
   const uploadRef = useRef<{ abort: () => void } | null>(null)
 
   // ---- Attempts state -----------------------------------------------------
@@ -167,18 +171,12 @@ export function PracticeWorkspace({
     }
   }
 
-  async function onUpload() {
-    if (!capture || uploading) return
+  async function uploadCapture(blob: Blob, mimeType: string, durationMs: number) {
     setUploading(true)
     setUploadProgress(0)
     setUploadError(null)
     const handle = uploadRecordingBlob(
-      {
-        questionId: question.id,
-        blob: capture.blob,
-        mimeType: capture.mimeType,
-        durationMs: capture.durationMs,
-      },
+      { questionId: question.id, blob, mimeType, durationMs },
       { onProgress: (sent, total) => setUploadProgress(Math.round((sent / total) * 100)) },
     )
     uploadRef.current = handle
@@ -191,6 +189,27 @@ export function PracticeWorkspace({
       await reloadRecordings()
     } else {
       setUploadError(outcome.error)
+    }
+  }
+
+  async function onUpload() {
+    if (!capture || uploading || trimming) return
+    await uploadCapture(capture.blob, capture.mimeType, capture.durationMs)
+  }
+
+  async function onTrimUpload(startSec: number, endSec: number) {
+    if (!capture || uploading || trimming) return
+    setTrimming(true)
+    setTrimError(null)
+    try {
+      const result = await trimRecording(capture.blob, startSec, endSec)
+      await uploadCapture(result.blob, capture.mimeType, result.durationMs)
+    } catch (cause) {
+      setTrimError(
+        cause instanceof Error ? cause.message : "Trimming failed. Try again or upload untrimmed.",
+      )
+    } finally {
+      setTrimming(false)
     }
   }
 
@@ -288,8 +307,11 @@ export function PracticeWorkspace({
             uploading={uploading}
             uploadProgress={uploadProgress}
             uploadError={uploadError}
+            trimming={trimming}
+            trimError={trimError}
             onStop={onStop}
             onUpload={onUpload}
+            onTrimUpload={onTrimUpload}
             onDiscard={() => {
               recorder.reset()
               setCapture(null)
@@ -311,8 +333,11 @@ function RecorderPanel({
   uploading,
   uploadProgress,
   uploadError,
+  trimming,
+  trimError,
   onStop,
   onUpload,
+  onTrimUpload,
   onDiscard,
   onCancelUpload,
 }: {
@@ -321,8 +346,11 @@ function RecorderPanel({
   uploading: boolean
   uploadProgress: number
   uploadError: string | null
+  trimming: boolean
+  trimError: string | null
   onStop: () => void
   onUpload: () => void
+  onTrimUpload: (startSec: number, endSec: number) => void
   onDiscard: () => void
   onCancelUpload: () => void
 }) {
@@ -416,29 +444,22 @@ function RecorderPanel({
           </div>
         ) : null}
 
-        {capture && !uploading ? (
-          <div className="flex flex-col gap-3">
-            <video
-              src={recorder.previewUrl ?? undefined}
-              controls
-              playsInline
-              className="aspect-video w-full rounded-md bg-black"
-              aria-label="Recording review playback"
-            />
-            <p className="text-muted-foreground text-xs">
-              {Math.round(capture.durationMs / 1000)}s · {capture.mimeType}
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <Button onClick={onUpload}>
-                <PlayIcon aria-hidden />
-                Upload attempt
-              </Button>
-              <Button variant="outline" onClick={onDiscard}>
-                <Trash2Icon aria-hidden />
-                Discard
-              </Button>
-            </div>
-          </div>
+        {capture && !uploading && !trimming ? (
+          <TrimPanel
+            capture={capture}
+            previewUrl={recorder.previewUrl}
+            trimError={trimError}
+            onUpload={onUpload}
+            onTrimUpload={onTrimUpload}
+            onDiscard={onDiscard}
+          />
+        ) : null}
+
+        {trimming ? (
+          <p className="text-sm" role="status">
+            <LoaderCircleIcon aria-hidden className="mr-2 inline animate-spin" />
+            Trimming video…
+          </p>
         ) : null}
 
         {uploading ? (
@@ -459,6 +480,113 @@ function RecorderPanel({
         ) : null}
       </CardContent>
     </Card>
+  )
+}
+
+function TrimPanel({
+  capture,
+  previewUrl,
+  trimError,
+  onUpload,
+  onTrimUpload,
+  onDiscard,
+}: {
+  capture: { blob: Blob; mimeType: string; durationMs: number }
+  previewUrl: string | null
+  trimError: string | null
+  onUpload: () => void
+  onTrimUpload: (startSec: number, endSec: number) => void
+  onDiscard: () => void
+}) {
+  const totalSec = Math.max(1, Math.round(capture.durationMs / 1000))
+  const [startSec, setStartSec] = useState(0)
+  const [endSec, setEndSec] = useState(totalSec)
+  const selected = endSec - startSec
+  const hasSelection = startSec > 0 || endSec < totalSec
+
+  return (
+    <div className="flex flex-col gap-3">
+      <video
+        src={previewUrl ?? undefined}
+        controls
+        playsInline
+        className="aspect-video w-full rounded-md bg-black"
+        aria-label="Recording review playback"
+      />
+      <p className="text-muted-foreground text-xs">
+        {totalSec}s · {capture.mimeType} · {formatBytes(capture.blob.size)}
+      </p>
+
+      <div className="flex flex-col gap-2 rounded-md border p-3">
+        <p className="text-sm font-medium">Trim before saving (cuts at nearest keyframe)</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div className="flex items-center gap-2">
+            <Label htmlFor="trim-start" className="w-12 shrink-0 text-xs">
+              Start
+            </Label>
+            <input
+              id="trim-start"
+              type="range"
+              min={0}
+              max={Math.max(0, endSec - 1)}
+              step={1}
+              value={startSec}
+              onChange={(event) => setStartSec(Number(event.target.value))}
+              className="w-full"
+              aria-label="Trim start position in seconds"
+            />
+            <span className="text-muted-foreground w-8 shrink-0 text-right text-xs tabular-nums">
+              {startSec}s
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Label htmlFor="trim-end" className="w-12 shrink-0 text-xs">
+              End
+            </Label>
+            <input
+              id="trim-end"
+              type="range"
+              min={Math.min(totalSec, startSec + 1)}
+              max={totalSec}
+              step={1}
+              value={endSec}
+              onChange={(event) => setEndSec(Number(event.target.value))}
+              className="w-full"
+              aria-label="Trim end position in seconds"
+            />
+            <span className="text-muted-foreground w-8 shrink-0 text-right text-xs tabular-nums">
+              {endSec}s
+            </span>
+          </div>
+        </div>
+        <p className="text-muted-foreground text-xs">
+          Keeping {selected}s of {totalSec}s
+        </p>
+      </div>
+
+      {trimError ? (
+        <p className="text-xs text-red-600 dark:text-red-400" role="alert">
+          {trimError}
+        </p>
+      ) : null}
+
+      <div className="flex flex-wrap gap-2">
+        {hasSelection ? (
+          <Button onClick={() => onTrimUpload(startSec, endSec)}>
+            <ScissorsIcon aria-hidden />
+            Trim & upload ({selected}s)
+          </Button>
+        ) : null}
+        <Button variant={hasSelection ? "outline" : "default"} onClick={onUpload}>
+          <PlayIcon aria-hidden />
+          Upload attempt
+        </Button>
+        <Button variant="outline" onClick={onDiscard}>
+          <Trash2Icon aria-hidden />
+          Discard
+        </Button>
+      </div>
+    </div>
   )
 }
 
@@ -501,7 +629,7 @@ function AttemptsPanel({
                     </Badge>
                     <span className="text-muted-foreground text-xs">
                       {new Date(row.createdAt).toLocaleString()} ·{" "}
-                      {Math.round(row.durationMs / 1000)}s
+                      {Math.round(row.durationMs / 1000)}s · {formatBytes(row.sizeBytes)}
                     </span>
                   </div>
                   <div className="flex gap-1">
@@ -540,6 +668,16 @@ function AttemptsPanel({
                 row.failureCode !== "YOUTUBE_PRIVATE_RESTRICTION" ? (
                   <p className="mt-2 text-xs text-muted-foreground">{row.failureMessage}</p>
                 ) : null}
+                {row.playable ? (
+                  <LocalPlayback recordingId={row.id} createdAt={row.createdAt} />
+                ) : null}
+                {row.status === "QUEUED" && row.uploadDeferredUntil ? (
+                  <p className="text-muted-foreground mt-2 text-xs">
+                    YouTube upload deferred until{" "}
+                    {new Date(row.uploadDeferredUntil).toLocaleString()} (daily quota). The video
+                    above stays playable here.
+                  </p>
+                ) : null}
                 {row.status === "READY" && row.youtubeVideoId ? (
                   <div className="mt-2">
                     {playingId === row.id ? (
@@ -569,11 +707,61 @@ function AttemptsPanel({
         )}
         <Separator className="my-1" />
         <p className="text-muted-foreground text-xs">
-          Recordings are transferred to the app&apos;s YouTube channel as unlisted videos once
-          processed.
+          Recordings stay playable here from storage and are transferred to the app&apos;s YouTube
+          channel as unlisted videos once processed.
         </p>
       </CardContent>
     </Card>
+  )
+}
+
+function LocalPlayback({ recordingId, createdAt }: { recordingId: string; createdAt: string }) {
+  const [open, setOpen] = useState(false)
+  const [url, setUrl] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  async function toggleOpen() {
+    if (open) {
+      setOpen(false)
+      return
+    }
+    if (!url) {
+      try {
+        const result = await apiFetch<{ url: string; method: "GET"; expiresAt: string }>(
+          `/api/recordings/${recordingId}/playback`,
+        )
+        setUrl(result.url)
+      } catch {
+        setError("Could not start playback. Try again.")
+        return
+      }
+    }
+    setOpen(true)
+  }
+
+  return (
+    <div className="mt-2">
+      <div className="flex items-center gap-2">
+        <Button variant="outline" size="sm" onClick={() => void toggleOpen()}>
+          <PlayIcon aria-hidden />
+          {open ? "Hide video" : "Play here"}
+        </Button>
+        {error ? (
+          <span className="text-xs text-red-600 dark:text-red-400" role="alert">
+            {error}
+          </span>
+        ) : null}
+      </div>
+      {open && url ? (
+        <video
+          src={url}
+          controls
+          playsInline
+          className="mt-2 aspect-video w-full max-w-md rounded-md bg-black"
+          aria-label={`Stored recording from ${new Date(createdAt).toLocaleString()}`}
+        />
+      ) : null}
+    </div>
   )
 }
 
@@ -582,4 +770,16 @@ function formatElapsed(ms: number): string {
   const minutes = Math.floor(totalSeconds / 60)
   const seconds = totalSeconds % 60
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  const units = ["KB", "MB", "GB"]
+  let value = bytes
+  let unit = -1
+  do {
+    value /= 1024
+    unit += 1
+  } while (value >= 1024 && unit < units.length - 1)
+  return `${value.toFixed(value >= 100 ? 0 : 1)} ${units[unit]}`
 }

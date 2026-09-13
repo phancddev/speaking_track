@@ -30,6 +30,7 @@ export default defineConfig([
     "playwright-report/**",
     "test-results/**",
     "apps/web/next-env.d.ts",
+    "apps/web/public/ffmpeg/**",
   ]),
   scope(["*.mjs", "scripts/**/*.mjs"], [js.configs.recommended], {
     languageOptions: { globals: globals.node },

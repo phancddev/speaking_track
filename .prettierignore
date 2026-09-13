@@ -7,3 +7,4 @@ playwright-report/
 test-results/
 min-version.js
 next-env.d.ts
+apps/web/public/ffmpeg

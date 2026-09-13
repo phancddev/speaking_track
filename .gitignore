@@ -29,3 +29,4 @@ caddy-config/
 # Logs and OS noise
 *.log
 .DS_Store
+apps/web/public/ffmpeg/
