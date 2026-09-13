@@ -808,6 +808,10 @@ function AttemptThumbnail({ recordingId }: { recordingId: string }) {
         const video = document.createElement("video")
         video.muted = true
         video.preload = "auto"
+        // Cross-origin video (presigned S3 host) taints the canvas unless
+        // the request is made in CORS mode; MinIO answers with the calling
+        // origin, so this both loads and allows toDataURL.
+        video.crossOrigin = "anonymous"
         video.src = result.url
         await new Promise<void>((resolve, reject) => {
           video.onloadeddata = () => resolve()
