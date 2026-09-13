@@ -196,10 +196,14 @@ export async function handleUpload(ctx: UploadContext): Promise<void> {
     const bytes = await readObjectBytes(ctx, recording)
     let send: { status: number; body: string }
     try {
+      // Single-shot full-body PUT REQUIRES Content-Range per the resumable
+      // protocol; without it Google still returns 200 but the stored file
+      // never finishes processing ("processing abandoned").
       send = await youtube.sendMedia({
         sessionUri,
         contentType: recording.mimeType,
         body: bytes,
+        contentRange: `bytes 0-${bytes.length - 1}/${bytes.length}`,
       })
     } catch {
       // Transport failure while sending the final bytes: the provider may
