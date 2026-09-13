@@ -16,7 +16,6 @@ import {
 import {
   APP_ERROR_CODES,
   RECORDING_STATES,
-  SINGLETON_YOUTUBE_CONNECTION_ID,
   TAG_COLOR_KEYS,
   YOUTUBE_PRIVACY_STATUSES,
   type JobName,
@@ -319,11 +318,14 @@ export const recordings = pgTable(
 )
 
 /**
- * Single logical row for the installation's YouTube channel connection.
- * `id` is always {@link SINGLETON_YOUTUBE_CONNECTION_ID}.
+ * Per-user YouTube channel connection: one row per user, `id` = user id.
+ * Each user uploads their own recordings to their own Google account's
+ * channel using the OAuth client they configured in `youtubeOauthClients`.
  */
 export const youtubeConnections = pgTable("youtube_connections", {
-  id: text("id").primaryKey(),
+  id: text("id")
+    .primaryKey()
+    .references(() => user.id, { onDelete: "cascade" }),
   channelId: text("channel_id").notNull(),
   channelTitle: text("channel_title").notNull(),
   /** AES-256-GCM envelope (JSON); never plaintext at rest. */
@@ -339,6 +341,25 @@ export const youtubeConnections = pgTable("youtube_connections", {
     .defaultNow()
     .$onUpdate(() => new Date()),
   lastVerifiedAt: timestamp("last_verified_at", { withTimezone: true }),
+})
+
+/**
+ * Per-user Google OAuth client credentials, entered on the web (settings
+ * page). The secret is stored as an AES-256-GCM envelope; the worker pairs
+ * it with the user's refresh token to upload to their own channel.
+ */
+export const youtubeOauthClients = pgTable("youtube_oauth_clients", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => user.id, { onDelete: "cascade" }),
+  clientId: text("client_id").notNull(),
+  /** AES-256-GCM envelope (JSON); never plaintext at rest. */
+  encryptedClientSecret: text("encrypted_client_secret").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow()
+    .$onUpdate(() => new Date()),
 })
 
 /** Durable intents bridging PostgreSQL and Redis. */
@@ -481,7 +502,6 @@ export type Draft = typeof drafts.$inferSelect
 export type Recording = typeof recordings.$inferSelect
 export type NewRecording = typeof recordings.$inferInsert
 export type YoutubeConnection = typeof youtubeConnections.$inferSelect
+export type YoutubeOauthClient = typeof youtubeOauthClients.$inferSelect
 export type OutboxEvent = typeof outboxEvents.$inferSelect
 export type NewOutboxEvent = typeof outboxEvents.$inferInsert
-
-export { SINGLETON_YOUTUBE_CONNECTION_ID }
