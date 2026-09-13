@@ -38,6 +38,10 @@ services:
       MAX_STAGING_BYTES: ${MAX_STAGING_BYTES:-107374182400}
     expose:
       - "3000"
+    # Loopback publish for host-side edge proxies (nginx on shared servers);
+    # harmless on single-server Caddy deployments.
+    ports:
+      - "127.0.0.1:${WEB_HOST_PORT:-13000}:3000"
     depends_on:
       postgres:
         condition: service_healthy
