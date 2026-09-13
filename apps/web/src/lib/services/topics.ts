@@ -45,6 +45,8 @@ export type QuestionListItem = {
   position: number
   /** Non-hidden recordings this question has (task: per-question counts). */
   recordingCount: number
+  /** When the user marked this question as drafted/practiced. */
+  draftedAt: Date | null
   createdAt: Date
   updatedAt: Date
 }
@@ -238,6 +240,7 @@ export async function listQuestions(
       id: questions.id,
       prompt: questions.prompt,
       position: questions.position,
+      draftedAt: questions.draftedAt,
       createdAt: questions.createdAt,
       updatedAt: questions.updatedAt,
       recordingCount: sql<number>`count(${recordings.id})::int`,
@@ -258,6 +261,7 @@ export async function listQuestions(
     prompt: row.prompt,
     position: row.position,
     recordingCount: row.recordingCount,
+    draftedAt: row.draftedAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   }))
@@ -400,6 +404,22 @@ async function assertOwnedTags(
   return rows.map((row) => row.id)
 }
 
+/** Marks or clears the per-question "drafted" checkbox. */
+export async function setQuestionDrafted(
+  db: Db,
+  ownerId: string,
+  questionId: string,
+  drafted: boolean,
+): Promise<QuestionListItem> {
+  const question = await loadOwnedQuestion(db, ownerId, questionId)
+  const [row] = await db
+    .update(questions)
+    .set({ draftedAt: drafted ? new Date() : null, updatedAt: new Date() })
+    .where(eq(questions.id, question.id))
+    .returning()
+  return toQuestionView(row!)
+}
+
 async function loadOwnedQuestion(
   db: DbExecutor,
   ownerId: string,
@@ -440,6 +460,7 @@ function toQuestionView(row: Question): QuestionListItem {
     prompt: row.prompt,
     position: row.position,
     recordingCount: 0,
+    draftedAt: row.draftedAt,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   }

@@ -12,6 +12,7 @@ import {
 import Link from "next/link"
 import { useState } from "react"
 import { apiFetch, ApiError, withOwner } from "@/lib/api-client"
+import { Checkbox } from "@/components/ui/checkbox"
 import type { TagView } from "@/lib/services/tags"
 import type { QuestionListItem, TopicDetail } from "@/lib/services/topics"
 import { TagsManagerDialog } from "../../../library/library-view"
@@ -89,6 +90,31 @@ export function TopicDetailView({
       setTopic((current) => ({ ...current, questions: ordered }))
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Could not reorder questions.")
+    }
+  }
+
+  async function toggleDrafted(question: QuestionListItem, drafted: boolean) {
+    // Optimistic flip; revert on failure.
+    setTopic((current) => ({
+      ...current,
+      questions: current.questions.map((q) =>
+        q.id === question.id ? { ...q, draftedAt: drafted ? new Date() : null } : q,
+      ),
+    }))
+    setError(null)
+    try {
+      await apiFetch(withOwner(`/api/questions/${question.id}/drafted`, ownerId), {
+        method: "PUT",
+        body: JSON.stringify({ drafted }),
+      })
+    } catch (cause) {
+      setTopic((current) => ({
+        ...current,
+        questions: current.questions.map((q) =>
+          q.id === question.id ? { ...q, draftedAt: question.draftedAt } : q,
+        ),
+      }))
+      setError(cause instanceof ApiError ? cause.message : "Could not update the drafted flag.")
     }
   }
 
@@ -176,14 +202,15 @@ export function TopicDetailView({
               <Card className="py-4">
                 <CardHeader>
                   <CardTitle className="flex items-start gap-3 text-base font-medium">
+                    <Checkbox
+                      aria-label={`Mark question ${index + 1} as drafted`}
+                      checked={Boolean(question.draftedAt)}
+                      onCheckedChange={(checked) => void toggleDrafted(question, checked === true)}
+                      className="mt-1"
+                    />
                     <span className="text-muted-foreground tabular-nums">{index + 1}.</span>
-                    <span className="flex-1">{question.prompt}</span>
-                    <span
-                      className="text-muted-foreground inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-normal"
-                      title={`${question.recordingCount} recorded video${question.recordingCount === 1 ? "" : "s"}`}
-                    >
-                      <VideoIcon aria-hidden className="size-3.5" />
-                      {question.recordingCount}
+                    <span className={`flex-1 ${question.draftedAt ? "text-muted-foreground" : ""}`}>
+                      {question.prompt}
                     </span>
                   </CardTitle>
                   <div className="flex flex-wrap items-center gap-1">

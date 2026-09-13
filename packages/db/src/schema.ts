@@ -232,6 +232,8 @@ export const questions = pgTable(
     prompt: text("prompt").notNull(),
     /** Non-negative integer for stable ordering. */
     position: integer("position").notNull().default(0),
+    /** User marked this question as drafted/practiced (manual checkbox). */
+    draftedAt: timestamp("drafted_at", { withTimezone: true }),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     ...timestamps,
   },
