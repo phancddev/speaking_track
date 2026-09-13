@@ -9,17 +9,24 @@ operating the system.
 
 ## Stack
 
-| Service    | Purpose                                                                         |
-| ---------- | ------------------------------------------------------------------------------- |
-| `web`      | Next.js App Router UI + HTTP APIs (Better Auth handler, custom JSON APIs)       |
-| `worker`   | BullMQ processors: outbox dispatch, YouTube upload/poll/delete, storage cleanup |
-| `postgres` | Source of truth: users, library, recordings, YouTube connection, outbox         |
-| `redis`    | BullMQ transport (operational, never user-facing state)                         |
-| `minio`    | Private S3-compatible staging bucket for raw recordings                         |
-| `caddy`    | HTTPS termination for the app and the public presigned-storage endpoint         |
+| Service    | Purpose                                                                                                           |
+| ---------- | ----------------------------------------------------------------------------------------------------------------- |
+| `web`      | Next.js App Router UI + HTTP APIs (Better Auth handler, custom JSON APIs)                                         |
+| `worker`   | BullMQ processors: outbox dispatch, YouTube upload/poll/delete, storage cleanup, periodic deferred-upload scanner |
+| `postgres` | Source of truth: users, library, recordings, YouTube connection, outbox                                           |
+| `redis`    | BullMQ transport (operational, never user-facing state)                                                           |
+| `minio`    | Private S3-compatible staging bucket for raw recordings                                                           |
+| `caddy`    | HTTPS termination for the app and the public presigned-storage endpoint                                           |
 
 Recording media never passes through Next.js: the browser PUTs directly to MinIO
 through a short-lived presigned URL on `S3_PUBLIC_DOMAIN`.
+
+## Recording lifecycle (deferred YouTube uploads)
+
+- After recording, the browser can trim the clip (ffmpeg.wasm, keyframe-accurate stream copy — no re-encode, assets served from `/ffmpeg`) before saving.
+- Saved recordings live in MinIO permanently and are immediately playable in the app via short-lived presigned GET URLs (`PRESIGNED_PLAYBACK_TTL_SECONDS`, default 3600) — playback never depends on YouTube.
+- The worker's scanner (`YOUTUBE_SCAN_INTERVAL_SECONDS`, default 300) periodically uploads recordings that are still `QUEUED`. On `YOUTUBE_QUOTA_EXCEEDED` the recording returns to `QUEUED` with an upload deferral past the next midnight-Pacific quota reset; the scanner picks it up again automatically. Nothing is lost and the video stays playable while it waits.
+- Attempt rows show recording size next to duration.
 
 ## Quick start (local, production-shaped)
 
