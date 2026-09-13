@@ -26,6 +26,7 @@ export type RecordingTransitionPatch = {
   youtubePrivacyStatus?: YoutubePrivacyStatus | null
   youtubeUploadSessionUriEncrypted?: string | null
   attemptCount?: number
+  uploadDeferredUntil?: Date | null
   storageKey?: string | null
   youtubeCreatedAt?: Date | null
   readyAt?: Date | null

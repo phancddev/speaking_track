@@ -23,6 +23,7 @@ import type {
   UploadContext,
 } from "./services"
 import { youtubeTokenEncryptionKey } from "./config"
+import { nextQuotaResetUtc } from "./quota"
 
 /**
  * Queue processors (task 06). Every handler locks/compares the database row
@@ -305,6 +306,21 @@ async function applyFailure(
   recording: Recording,
   error: AppError,
 ): Promise<void> {
+  if (error.code === "YOUTUBE_QUOTA_EXCEEDED") {
+    // Quota exhaustion is not a recording failure: the source object stays
+    // in storage and the scanner re-attempts after the daily quota reset.
+    await transitionRecordingStatus(db, {
+      recordingId: recording.id,
+      expected: "YOUTUBE_UPLOADING",
+      next: "QUEUED",
+      patch: {
+        failureCode: error.code,
+        failureMessage: error.message,
+        uploadDeferredUntil: nextQuotaResetUtc(),
+      },
+    })
+    return
+  }
   await transitionRecordingStatus(db, {
     recordingId: recording.id,
     expected: "YOUTUBE_UPLOADING",
@@ -312,9 +328,6 @@ async function applyFailure(
     patch: {
       failureCode: error.code,
       failureMessage: error.message,
-      ...(error.code === "YOUTUBE_QUOTA_EXCEEDED" || error.code === "YOUTUBE_REAUTH_REQUIRED"
-        ? {}
-        : {}),
     },
   })
 }
@@ -333,24 +346,15 @@ export async function handlePollProcessing(ctx: PollContext): Promise<void> {
       status.privacyStatus === "unlisted" &&
       status.embeddable
     ) {
-      // READY requires unlisted + embeddable + processed (plan/02).
-      const ready = await db.transaction(async (tx) => {
-        const moved = await transitionRecordingStatus(tx, {
-          recordingId: recording.id,
-          expected: "YOUTUBE_PROCESSING",
-          next: "READY",
-          patch: { readyAt: new Date(), youtubePrivacyStatus: "unlisted" },
-        })
-        if (moved.ok) {
-          await insertOutboxEvent(tx, {
-            type: "storage.cleanup",
-            aggregateId: recording.id,
-            payload: { recordingId: recording.id },
-          })
-        }
-        return moved.ok
+      // READY requires unlisted + embeddable + processed (plan/02). The
+      // source object stays in storage so the app can stream playback
+      // independently of YouTube; cleanup happens only on user delete.
+      await transitionRecordingStatus(db, {
+        recordingId: recording.id,
+        expected: "YOUTUBE_PROCESSING",
+        next: "READY",
+        patch: { readyAt: new Date(), youtubePrivacyStatus: "unlisted" },
       })
-      void ready
       return
     }
     if (status.uploadStatus === "failed" || status.processingFailure) {

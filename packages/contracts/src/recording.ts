@@ -40,7 +40,9 @@ export const RecordingStateSchema = z.enum(RECORDING_STATES)
 export const RECORDING_TRANSITIONS: Readonly<Record<RecordingState, readonly RecordingState[]>> = {
   STAGING: ["QUEUED", "EXPIRED", "DELETE_PENDING"],
   QUEUED: ["YOUTUBE_UPLOADING", "FAILED", "DELETE_PENDING"],
-  YOUTUBE_UPLOADING: ["YOUTUBE_PROCESSING", "FAILED", "DELETE_PENDING"],
+  // Quota exhaustion returns to QUEUED with an upload-deferred timestamp so
+  // the scanner re-attempts after the daily quota reset.
+  YOUTUBE_UPLOADING: ["YOUTUBE_PROCESSING", "FAILED", "QUEUED", "DELETE_PENDING"],
   YOUTUBE_PROCESSING: ["READY", "FAILED", "DELETE_PENDING"],
   READY: ["DELETE_PENDING"],
   FAILED: ["QUEUED", "DELETE_PENDING"],

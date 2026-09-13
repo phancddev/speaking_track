@@ -18,6 +18,7 @@ import {
   type Db,
 } from "@speaking-track/db"
 import { createWorkerServices, type WorkerServices } from "../src/services"
+import { scanOnce } from "../src/scanner"
 import { encryptSecret, serializeEnvelope } from "@speaking-track/youtube"
 
 /**
@@ -330,7 +331,7 @@ describe("youtube.upload processor", () => {
     expect(["YOUTUBE_PROCESSING"]).toContain(row.status)
   })
 
-  it("quotaExceeded does not hot-loop: recording fails with the stable code", async () => {
+  it("quotaExceeded defers instead of failing: QUEUED with a past-reset retry timestamp", async () => {
     const id = randomUUID()
     await queueRecording({ id, storageKey: `recordings/${OWNER_ID}/${id}/source.webm` })
     provider.failInitWith = { status: 403, reason: "quotaExceeded" }
@@ -338,8 +339,13 @@ describe("youtube.upload processor", () => {
     await services.handleUpload({ recordingId: id })
     provider.failInitWith = undefined
     const row = (await db.select().from(recordings).where(eq(recordings.id, id)))[0]!
-    expect(row.status).toBe("FAILED")
+    expect(row.status).toBe("QUEUED")
     expect(row.failureCode).toBe("YOUTUBE_QUOTA_EXCEEDED")
+    // Deferral lands within (now, now + 25h]: strictly future, past the next
+    // midnight-Pacific reset, and never more than a day out.
+    const deferred = row.uploadDeferredUntil!.getTime()
+    expect(deferred).toBeGreaterThan(Date.now())
+    expect(deferred).toBeLessThanOrEqual(Date.now() + 25 * 60 * 60 * 1000)
   })
 
   it("revoked refresh token marks the connection REAUTH_REQUIRED and the recording actionable", async () => {
@@ -450,5 +456,52 @@ describe("encryption envelope", () => {
 
     const wrongKey = Buffer.alloc(32, 1).toString("base64")
     expect(() => decryptSecret(envelope, wrongKey)).toThrow(/Decryption failed|key/)
+  })
+})
+describe("deferred-upload scanner", () => {
+  const scan = () => scanOnce(db, () => undefined)
+
+  it("emits exactly one upload intent for due QUEUED recordings", async () => {
+    const dueId = randomUUID()
+    await queueRecording({ id: dueId, storageKey: `recordings/${OWNER_ID}/${dueId}/source.webm` })
+
+    const emitted = await scan()
+    expect(emitted).toBeGreaterThanOrEqual(1)
+    const intents = await db.select().from(outboxEvents).where(eq(outboxEvents.aggregateId, dueId))
+    expect(intents.filter((event) => event.type === "youtube.upload").length).toBe(1)
+
+    // A second scan must not double-enqueue while the intent is unpublished.
+    await scan()
+    const again = await db.select().from(outboxEvents).where(eq(outboxEvents.aggregateId, dueId))
+    expect(again.filter((event) => event.type === "youtube.upload").length).toBe(1)
+  })
+
+  it("skips quota-deferred recordings until the deferral lapses", async () => {
+    const deferredId = randomUUID()
+    await queueRecording({
+      id: deferredId,
+      storageKey: `recordings/${OWNER_ID}/${deferredId}/source.webm`,
+      uploadDeferredUntil: new Date(Date.now() + 60 * 60 * 1000),
+    })
+
+    await scan()
+    const intents = await db
+      .select()
+      .from(outboxEvents)
+      .where(eq(outboxEvents.aggregateId, deferredId))
+    expect(intents.filter((event) => event.type === "youtube.upload").length).toBe(0)
+
+    // Once the deferral is past, the scanner picks the recording up again.
+    await db
+      .update(recordings)
+      .set({ uploadDeferredUntil: new Date(Date.now() - 1000) })
+      .where(eq(recordings.id, deferredId))
+    const emitted = await scan()
+    expect(emitted).toBeGreaterThanOrEqual(1)
+    const picked = await db
+      .select()
+      .from(outboxEvents)
+      .where(eq(outboxEvents.aggregateId, deferredId))
+    expect(picked.some((event) => event.type === "youtube.upload")).toBe(true)
   })
 })

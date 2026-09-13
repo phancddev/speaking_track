@@ -5,7 +5,8 @@ import { createDatabaseConfig, createDbClient, type Db } from "@speaking-track/d
 import { createRedisConfig } from "@speaking-track/queue"
 import { Redis } from "ioredis"
 import { createWorkerServices, type WorkerServices } from "./services"
-import { UPLOAD_CONCURRENCY } from "./config"
+import { UPLOAD_CONCURRENCY, UPLOAD_SCAN_INTERVAL_SECONDS } from "./config"
+import { startUploadScanner } from "./scanner"
 
 /**
  * apps/worker entry point (task 06): BullMQ processors for
@@ -25,15 +26,15 @@ function logError(event: string, fields: Record<string, unknown> = {}): void {
     `${JSON.stringify({ ts: new Date().toISOString(), level: "error", service: "worker", event, ...fields })}\n`,
   )
 }
-
-const startedAt = Date.now()
 const shutdownSignals: NodeJS.Timeout[] = []
+const scannerTimers: { stop(): void }[] = []
 const workers: Worker[] = []
 let services: WorkerServices | null = null
 let db: Db | null = null
 let redis: Redis | null = null
-let dispatcherTimer: NodeJS.Timeout | null = null
+let dispatcherTimer: NodeJS.Timeout | undefined
 let shuttingDown = false
+const startedAt = Date.now()
 
 async function main(): Promise<void> {
   const env = process.env
@@ -66,6 +67,11 @@ async function main(): Promise<void> {
     })
   }, 2000)
   shutdownSignals.push(dispatcherTimer)
+
+  // Deferred-upload scanner: periodically re-emits youtube.upload intents
+  // for QUEUED recordings (initial delivery plus quota-reset retries).
+  const scanner = startUploadScanner(db, UPLOAD_SCAN_INTERVAL_SECONDS, log)
+  scannerTimers.push(scanner)
 
   log("startup", {
     pid: process.pid,
@@ -129,9 +135,10 @@ async function shutdown(signal: string): Promise<void> {
   for (const timer of shutdownSignals) {
     clearInterval(timer)
   }
-  if (dispatcherTimer) {
-    clearInterval(dispatcherTimer)
+  for (const scanner of scannerTimers) {
+    scanner.stop()
   }
+  clearInterval(dispatcherTimer)
   // Stop intake, let active handlers settle within the window.
   await Promise.allSettled(workers.map((worker) => worker.close()))
   await services?.close()

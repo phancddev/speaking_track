@@ -2,6 +2,12 @@
 
 export const UPLOAD_CONCURRENCY = positiveIntOrDefault(process.env.YOUTUBE_UPLOAD_CONCURRENCY, 1)
 
+/** How often the deferred-upload scanner looks for pending QUEUED uploads. */
+export const UPLOAD_SCAN_INTERVAL_SECONDS = positiveIntOrDefault(
+  process.env.YOUTUBE_SCAN_INTERVAL_SECONDS,
+  300,
+)
+
 export function youtubeTokenEncryptionKey(): string {
   return process.env.YOUTUBE_TOKEN_ENCRYPTION_KEY ?? ""
 }

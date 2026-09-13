@@ -281,6 +281,8 @@ export const recordings = pgTable(
     attemptCount: integer("attempt_count").notNull().default(0),
     failureCode: text("failure_code"),
     failureMessage: text("failure_message"),
+    /** Quota backoff: earliest time the scanner may re-attempt upload. */
+    uploadDeferredUntil: timestamp("upload_deferred_until", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()

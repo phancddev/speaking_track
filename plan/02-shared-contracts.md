@@ -133,6 +133,7 @@ STAGING
 
 STAGING -> EXPIRED
 QUEUED | YOUTUBE_UPLOADING | YOUTUBE_PROCESSING -> FAILED
+YOUTUBE_UPLOADING -> QUEUED             (quota exhaustion; deferred re-scan)
 FAILED -> QUEUED                       (manual retry when source exists)
 any non-DELETED state -> DELETE_PENDING -> DELETED
 ```
@@ -140,10 +141,11 @@ any non-DELETED state -> DELETE_PENDING -> DELETED
 Rules:
 
 - `STAGING`: row and presigned PUT exist; object has not yet been verified.
-- `QUEUED`: object metadata was verified and an upload outbox event exists in the same transaction.
+- `QUEUED`: object metadata was verified. The upload intent may arrive from completion directly or from the periodic deferred-upload scanner (initial delivery plus quota-reset retries); at most one unpublished `youtube.upload` outbox event exists per recording.
 - `YOUTUBE_UPLOADING`: worker owns the attempt. A stale lock may be recovered.
 - `YOUTUBE_PROCESSING`: `youtubeVideoId` exists; no second `videos.insert` is allowed.
-- `READY`: YouTube reports successful processing, effective visibility is `unlisted`, and embed is allowed. Only then may source cleanup be queued.
+- `READY`: YouTube reports successful processing, effective visibility is `unlisted`, and embed is allowed. The source object is RETAINED in storage so the app can stream playback locally; source cleanup happens only via user delete.
+- Quota deferral: on `YOUTUBE_QUOTA_EXCEEDED` the recording returns to `QUEUED` with `uploadDeferredUntil` set past the next midnight Pacific reset. The worker's periodic scanner re-emits the `youtube.upload` intent once the deferral lapses; the recording stays playable from storage the whole time.
 - `FAILED`: terminal/retry-exhausted application failure with a stable code. If the YouTube ID already exists, retry resumes status handling rather than inserting again. `YOUTUBE_UPLOAD_AMBIGUOUS` blocks ordinary retry to avoid creating a duplicate after an unknowable provider outcome.
 - `EXPIRED`: staging completion was never confirmed before retention deadline.
 - `DELETE_PENDING`: hidden from normal lists while cleanup is performed.
