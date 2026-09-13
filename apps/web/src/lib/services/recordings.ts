@@ -46,6 +46,10 @@ export type RecordingView = {
   attemptCount: number
   embeddable: boolean
   retryable: boolean
+  /** Local streaming from object storage is available for this recording. */
+  playable: boolean
+  /** Quota backoff timestamp while the recording waits in QUEUED. */
+  uploadDeferredUntil: string | null
   createdAt: string
   updatedAt: string
 }
@@ -70,6 +74,11 @@ function toRecordingView(row: Recording): RecordingView {
     // Embeddable only when READY: YouTube processed AND effective unlisted.
     embeddable: row.status === "READY" && row.youtubePrivacyStatus === "unlisted",
     retryable,
+    // Anything with a live storage object can stream locally, including
+    // quota-deferred QUEUED rows and FAILED retries.
+    playable:
+      row.storageKey !== null && !["DELETE_PENDING", "DELETED", "EXPIRED"].includes(row.status),
+    uploadDeferredUntil: row.uploadDeferredUntil?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   }

@@ -39,6 +39,19 @@ export const PresignedUploadSchema = z.strictObject({
   expiresAt: z.string(),
 })
 
+/** Presigned playback descriptor for streaming a stored recording. */
+export type PresignedPlayback = {
+  url: string
+  method: "GET"
+  expiresAt: string
+}
+
+export const PresignedPlaybackSchema = z.strictObject({
+  url: z.string().url(),
+  method: z.literal("GET"),
+  expiresAt: z.string(),
+})
+
 /** Object metadata as verified on completion. */
 export type PrivateObjectStat = {
   sizeBytes: number

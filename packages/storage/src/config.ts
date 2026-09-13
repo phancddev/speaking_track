@@ -17,6 +17,7 @@ const STORAGE_VARIABLES = {
   secretAccessKey: "S3_SECRET_ACCESS_KEY",
   forcePathStyle: "S3_FORCE_PATH_STYLE",
   presignedUploadTtlSeconds: "PRESIGNED_UPLOAD_TTL_SECONDS",
+  presignedPlaybackTtlSeconds: "PRESIGNED_PLAYBACK_TTL_SECONDS",
   maxRecordingBytes: "MAX_RECORDING_BYTES",
   maxStagingBytes: "MAX_STAGING_BYTES",
 } as const
@@ -34,6 +35,9 @@ const STORAGE_ENV_SCHEMA = z.object({
   [STORAGE_VARIABLES.presignedUploadTtlSeconds]: ENV_SCHEMAS.positiveInt.pipe(
     z.number().int().max(604800, "presigned URLs cannot exceed the SigV4 7-day maximum"),
   ),
+  [STORAGE_VARIABLES.presignedPlaybackTtlSeconds]: ENV_SCHEMAS.positiveInt
+    .pipe(z.number().int().max(604800, "presigned URLs cannot exceed the SigV4 7-day maximum"))
+    .default(3600),
   [STORAGE_VARIABLES.maxRecordingBytes]: ENV_SCHEMAS.positiveInt,
   [STORAGE_VARIABLES.maxStagingBytes]: ENV_SCHEMAS.positiveInt,
 })
@@ -47,6 +51,7 @@ export type StorageConfig = {
   secretAccessKey: string
   forcePathStyle: boolean
   presignedUploadTtlSeconds: number
+  presignedPlaybackTtlSeconds: number
   maxRecordingBytes: number
   maxStagingBytes: number
 }
@@ -66,6 +71,7 @@ export function createStorageConfig(env: Record<string, string | undefined>): St
     secretAccessKey: value[STORAGE_VARIABLES.secretAccessKey],
     forcePathStyle: value[STORAGE_VARIABLES.forcePathStyle],
     presignedUploadTtlSeconds: value[STORAGE_VARIABLES.presignedUploadTtlSeconds],
+    presignedPlaybackTtlSeconds: value[STORAGE_VARIABLES.presignedPlaybackTtlSeconds] ?? 3600,
     maxRecordingBytes: value[STORAGE_VARIABLES.maxRecordingBytes],
     maxStagingBytes: value[STORAGE_VARIABLES.maxStagingBytes],
   }

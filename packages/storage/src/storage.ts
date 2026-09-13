@@ -12,6 +12,7 @@ import {
   RECORDING_MIME_EXTENSION,
   SupportedRecordingMimeTypeSchema,
   type PresignedUpload,
+  type PresignedPlayback,
   type PrivateObjectStat,
   type SupportedRecordingMimeType,
 } from "@speaking-track/contracts"
@@ -47,6 +48,8 @@ export type StorageClient = {
     mimeType: SupportedRecordingMimeType
   }): string
   createPresignedUpload(input: CreateUploadInput): Promise<PresignedUpload>
+  /** Short-lived presigned GET for browser streaming of a stored recording. */
+  createPresignedPlayback(objectKey: string): Promise<PresignedPlayback>
   statPrivateObject(objectKey: string): Promise<PrivateObjectStat>
   getPrivateObjectStream(objectKey: string): Promise<NodeJS.ReadableStream>
   deletePrivateObject(objectKey: string): Promise<void>
@@ -126,6 +129,20 @@ export function createStorage(config: StorageConfig): StorageClient {
         method: "PUT",
         headers: { "Content-Type": mimeType.data },
         expiresAt: new Date(Date.now() + config.presignedUploadTtlSeconds * 1000).toISOString(),
+      }
+    },
+
+    async createPresignedPlayback(objectKey) {
+      assertSafeObjectKey(objectKey)
+      const url = await getSignedUrl(
+        signingClient,
+        new GetObjectCommand({ Bucket: config.bucket, Key: objectKey }),
+        { expiresIn: config.presignedPlaybackTtlSeconds },
+      )
+      return {
+        url,
+        method: "GET",
+        expiresAt: new Date(Date.now() + config.presignedPlaybackTtlSeconds * 1000).toISOString(),
       }
     },
 
