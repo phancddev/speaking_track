@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+.next/
+out/
+dist/
+*.tsbuildinfo
+
+# Environment files and secrets — never commit real values
+.env
+.env.*
+!.env.example
+
+# Test artifacts
+coverage/
+playwright-report/
+test-results/
+blob-report/
+
+# Local service data (bind-mount development)
+minio-data/
+postgres-data/
+redis-data/
+caddy-data/
+caddy-config/
+
+# Logs and OS noise
+*.log
+.DS_Store

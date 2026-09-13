@@ -1,0 +1,26 @@
+# Dependencies and build output (built inside stages, never copied in)
+**/node_modules
+**/.next
+**/dist
+**/out
+**/coverage
+
+# Secrets — never enter the build context
+.env
+.env.*
+!.env.example
+
+# Not needed inside images
+.git
+plan
+e2e
+scripts
+playwright-report
+test-results
+*.md
+Dockerfile
+apps/web/Dockerfile
+apps/worker/Dockerfile
+compose.yaml
+Caddyfile
+.dockerignore

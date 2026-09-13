@@ -1,0 +1,9 @@
+pnpm-lock.yaml
+plan/
+.next/
+dist/
+coverage/
+playwright-report/
+test-results/
+min-version.js
+next-env.d.ts
