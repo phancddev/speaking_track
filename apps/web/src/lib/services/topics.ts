@@ -231,6 +231,8 @@ export async function listQuestions(
   topicId: string,
 ): Promise<QuestionListItem[]> {
   await assertOwnedTopic(db, ownerId, topicId)
+  // Join + groupBy (same shape as the proven topic questionCount query):
+  // counts visible recordings per question in one pass.
   const rows = await db
     .select({
       id: questions.id,
@@ -238,14 +240,18 @@ export async function listQuestions(
       position: questions.position,
       createdAt: questions.createdAt,
       updatedAt: questions.updatedAt,
-      recordingCount: sql<number>`(
-        select count(*)::int from ${recordings}
-        where ${recordings.questionId} = ${questions.id}
-          and ${recordings.status} not in ('DELETE_PENDING', 'DELETED', 'EXPIRED')
-      )`,
+      recordingCount: sql<number>`count(${recordings.id})::int`,
     })
     .from(questions)
+    .leftJoin(
+      recordings,
+      and(
+        eq(recordings.questionId, questions.id),
+        sql`${recordings.status} not in ('DELETE_PENDING', 'DELETED', 'EXPIRED')`,
+      ),
+    )
     .where(and(eq(questions.topicId, topicId), isNull(questions.deletedAt)))
+    .groupBy(questions.id)
     .orderBy(asc(questions.position), asc(questions.createdAt))
   return rows.map((row) => ({
     id: row.id,

@@ -3,6 +3,7 @@
 import {
   CircleAlertIcon,
   CircleStopIcon,
+  ExternalLinkIcon,
   LoaderCircleIcon,
   MicIcon,
   PlayIcon,
@@ -24,6 +25,13 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
@@ -599,11 +607,18 @@ function AttemptsPanel({
   onRetry: (recordingId: string) => void
   onDelete: (recordingId: string) => void
 }) {
-  const [playingId, setPlayingId] = useState<string | null>(null)
+  const [playing, setPlaying] = useState<RecordingView | null>(null)
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-lg font-semibold">Attempts</CardTitle>
+        <CardTitle className="text-lg font-semibold">
+          Attempts
+          <span className="text-muted-foreground ml-2 text-sm font-normal">
+            {recordings.length > 0
+              ? `${recordings.length} video${recordings.length === 1 ? "" : "s"}`
+              : null}
+          </span>
+        </CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {recordings.length === 0 ? (
@@ -611,15 +626,27 @@ function AttemptsPanel({
             No attempts yet. Record and upload your first answer above.
           </p>
         ) : (
-          <ul className="flex flex-col gap-3">
+          <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {recordings.map((row) => (
-              <li key={row.id} className="flex flex-col gap-2 rounded-md border p-3 sm:flex-row">
-                <AttemptThumbnail
-                  recordingId={row.id}
-                  youtubeVideoId={row.youtubeVideoId}
-                  createdAt={row.createdAt}
-                />
-                <div className="min-w-0 flex-1">
+              <li key={row.id} className="overflow-hidden rounded-md border">
+                <button
+                  type="button"
+                  className="bg-muted group relative block w-full"
+                  disabled={!row.playable}
+                  onClick={() => setPlaying(row)}
+                  aria-label={`Play attempt from ${new Date(row.createdAt).toLocaleString()}`}
+                >
+                  <AttemptThumbnail recordingId={row.id} />
+                  <span className="absolute inset-0 flex items-center justify-center">
+                    <span className="flex size-12 items-center justify-center rounded-full bg-black/60 text-white transition group-hover:bg-black/80">
+                      <PlayIcon aria-hidden className="size-6" />
+                    </span>
+                  </span>
+                  <span className="absolute right-1.5 bottom-1.5 rounded bg-black/70 px-1.5 py-0.5 text-xs text-white tabular-nums">
+                    {Math.round(row.durationMs / 1000)}s
+                  </span>
+                </button>
+                <div className="flex flex-col gap-1 p-2.5">
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge
                       variant={
@@ -632,12 +659,28 @@ function AttemptsPanel({
                     >
                       {STATUS_LABELS[row.status]}
                     </Badge>
-                    <span className="text-muted-foreground text-xs">
-                      {new Date(row.createdAt).toLocaleString()} ·{" "}
-                      {Math.round(row.durationMs / 1000)}s · {formatBytes(row.sizeBytes)}
+                    <span className="text-muted-foreground text-xs tabular-nums">
+                      {formatBytes(row.sizeBytes)}
+                    </span>
+                    <span className="text-muted-foreground ml-auto text-xs">
+                      {new Date(row.createdAt).toLocaleString()}
                     </span>
                   </div>
-                  <div className="flex gap-1">
+                  {NON_TERMINAL_STATES.includes(row.status) ? (
+                    <p className="text-muted-foreground text-xs">{STATUS_LABELS[row.status]}…</p>
+                  ) : null}
+                  {row.status === "QUEUED" && row.uploadDeferredUntil ? (
+                    <p className="text-muted-foreground text-xs">
+                      Upload deferred until {new Date(row.uploadDeferredUntil).toLocaleTimeString()}{" "}
+                      (quota) — still playable here.
+                    </p>
+                  ) : null}
+                  {row.failureMessage && row.status === "FAILED" ? (
+                    <p className="text-muted-foreground line-clamp-2 text-xs">
+                      {row.failureMessage}
+                    </p>
+                  ) : null}
+                  <div className="mt-1 flex gap-1">
                     {row.retryable ? (
                       <Button variant="ghost" size="sm" onClick={() => onRetry(row.id)}>
                         <RotateCcwIcon aria-hidden />
@@ -647,6 +690,7 @@ function AttemptsPanel({
                     <Button
                       variant="ghost"
                       size="sm"
+                      className="text-destructive"
                       aria-label={`Delete attempt from ${new Date(row.createdAt).toLocaleString()}`}
                       onClick={() => onDelete(row.id)}
                     >
@@ -655,91 +699,108 @@ function AttemptsPanel({
                     </Button>
                   </div>
                 </div>
-                {row.failureCode === "YOUTUBE_UPLOAD_AMBIGUOUS" ? (
-                  <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
-                    This attempt cannot be retried automatically because the previous upload outcome
-                    is unknown. Contact an administrator.
-                  </p>
-                ) : null}
-                {row.failureCode === "YOUTUBE_PRIVATE_RESTRICTION" ? (
-                  <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
-                    YouTube forced this video to private. It cannot be played until the API project
-                    passes YouTube&apos;s audit.
-                  </p>
-                ) : null}
-                {row.failureMessage &&
-                row.status === "FAILED" &&
-                row.failureCode !== "YOUTUBE_UPLOAD_AMBIGUOUS" &&
-                row.failureCode !== "YOUTUBE_PRIVATE_RESTRICTION" ? (
-                  <p className="mt-2 text-xs text-muted-foreground">{row.failureMessage}</p>
-                ) : null}
-                {row.playable ? (
-                  <LocalPlayback recordingId={row.id} createdAt={row.createdAt} />
-                ) : null}
-                {row.status === "QUEUED" && row.uploadDeferredUntil ? (
-                  <p className="text-muted-foreground mt-2 text-xs">
-                    YouTube upload deferred until{" "}
-                    {new Date(row.uploadDeferredUntil).toLocaleString()} (daily quota). The video
-                    above stays playable here.
-                  </p>
-                ) : null}
-                {row.status === "READY" && row.youtubeVideoId ? (
-                  <div className="mt-2">
-                    {playingId === row.id ? (
-                      <div className="aspect-video w-full max-w-md">
-                        <iframe
-                          className="h-full w-full rounded-md"
-                          src={`https://www.youtube-nocookie.com/embed/${row.youtubeVideoId}?rel=0`}
-                          title={`Attempt from ${new Date(row.createdAt).toLocaleString()}`}
-                          allow="encrypted-media; picture-in-picture"
-                          allowFullScreen
-                        />
-                      </div>
-                    ) : (
-                      <Button variant="outline" size="sm" onClick={() => setPlayingId(row.id)}>
-                        <PlayIcon aria-hidden />
-                        Play attempt
-                      </Button>
-                    )}
-                  </div>
-                ) : null}
-                {NON_TERMINAL_STATES.includes(row.status) ? (
-                  <p className="text-muted-foreground mt-2 text-xs">{STATUS_LABELS[row.status]}…</p>
-                ) : null}
               </li>
             ))}
           </ul>
         )}
         <Separator className="my-1" />
         <p className="text-muted-foreground text-xs">
-          Recordings stay playable here from storage and are transferred to the app&apos;s YouTube
-          channel as unlisted videos once processed.
+          Recordings stay playable here from storage and are transferred to your YouTube channel as
+          unlisted videos once processed.
         </p>
       </CardContent>
+      <AttemptPlayerDialog attempt={playing} onClose={() => setPlaying(null)} />
     </Card>
   )
 }
 
-function AttemptThumbnail({
-  recordingId,
-  youtubeVideoId,
-  createdAt,
+function AttemptPlayerDialog({
+  attempt,
+  onClose,
 }: {
-  recordingId: string
-  youtubeVideoId: string | null
-  createdAt: string
+  attempt: RecordingView | null
+  onClose: () => void
 }) {
-  // YouTube thumbnails are a pure function of the video id — derive them
-  // directly instead of setting them inside the effect.
-  const youtubeSrc = youtubeVideoId
-    ? `https://i.ytimg.com/vi/${youtubeVideoId}/mqdefault.jpg`
-    : null
-  const [capturedSrc, setCapturedSrc] = useState<string | null>(null)
-  const src = youtubeSrc ?? capturedSrc
+  const [storedUrl, setStoredUrl] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const resetKey = attempt?.id ?? "none"
+  const [loadedFor, setLoadedFor] = useState<string | null>(null)
+  useEffect(() => {
+    if (!attempt?.playable) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const result = await apiFetch<{ url: string }>(`/api/recordings/${attempt.id}/playback`)
+        if (!cancelled) {
+          setStoredUrl(result.url)
+          setLoadedFor(resetKey)
+        }
+      } catch {
+        if (!cancelled) setError("Could not start playback. Try again.")
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [attempt, resetKey])
+
+  // The freshly-fetched URL applies only while the dialog shows the same
+  // attempt; switching attempts discards it without an extra render hop.
+  const url = loadedFor === resetKey ? storedUrl : null
+
+  if (!attempt) return null
+  return (
+    <Dialog open={attempt !== null} onOpenChange={(open) => (!open ? onClose() : undefined)}>
+      <DialogContent className="max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>Attempt · {new Date(attempt.createdAt).toLocaleString()}</DialogTitle>
+          <DialogDescription>
+            {Math.round(attempt.durationMs / 1000)}s · {formatBytes(attempt.sizeBytes)} ·{" "}
+            {STATUS_LABELS[attempt.status]}
+          </DialogDescription>
+        </DialogHeader>
+        {error ? (
+          <p className="text-sm text-red-600 dark:text-red-400" role="alert">
+            {error}
+          </p>
+        ) : url ? (
+          <video
+            src={url}
+            controls
+            autoPlay
+            playsInline
+            className="aspect-video w-full rounded-md bg-black"
+            aria-label="Attempt playback"
+          />
+        ) : (
+          <div className="bg-muted flex aspect-video w-full items-center justify-center rounded-md">
+            <LoaderCircleIcon aria-hidden className="animate-spin" />
+          </div>
+        )}
+        {attempt.status === "READY" && attempt.youtubeVideoId ? (
+          <a
+            className="text-primary inline-flex items-center gap-1 text-sm hover:underline"
+            href={`https://www.youtube.com/watch?v=${attempt.youtubeVideoId}`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            <ExternalLinkIcon aria-hidden className="size-4" />
+            Open on YouTube
+          </a>
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function AttemptThumbnail({ recordingId }: { recordingId: string }) {
+  // Thumbnails are ALWAYS captured from the stored video so every attempt
+  // looks the same whether or not YouTube has processed it (abandoned
+  // uploads never get a YouTube thumbnail).
+  const [src, setSrc] = useState<string | null>(null)
 
   useEffect(() => {
-    if (youtubeSrc) return
-    // Not on YouTube (yet): capture a frame from the stored video.
     let cancelled = false
     void (async () => {
       try {
@@ -761,7 +822,7 @@ function AttemptThumbnail({
         canvas.width = 320
         canvas.height = Math.round((320 / (video.videoWidth || 320)) * (video.videoHeight || 180))
         canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height)
-        if (!cancelled) setCapturedSrc(canvas.toDataURL("image/jpeg", 0.7))
+        if (!cancelled) setSrc(canvas.toDataURL("image/jpeg", 0.7))
       } catch {
         // Thumbnails are decorative; failures just render the placeholder.
       }
@@ -769,13 +830,10 @@ function AttemptThumbnail({
     return () => {
       cancelled = true
     }
-  }, [recordingId, youtubeVideoId])
+  }, [recordingId])
 
   return (
-    <div
-      className="bg-muted relative aspect-video w-full shrink-0 overflow-hidden rounded-md sm:w-40"
-      aria-hidden
-    >
+    <div className="bg-muted relative aspect-video w-full overflow-hidden" aria-hidden>
       {src ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={src} alt="" className="h-full w-full object-cover" />
@@ -784,59 +842,6 @@ function AttemptThumbnail({
           <VideoIcon aria-hidden className="size-6" />
         </div>
       )}
-      <span className="sr-only">
-        Thumbnail for attempt from {new Date(createdAt).toLocaleString()}
-      </span>
-    </div>
-  )
-}
-
-function LocalPlayback({ recordingId, createdAt }: { recordingId: string; createdAt: string }) {
-  const [open, setOpen] = useState(false)
-  const [url, setUrl] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  async function toggleOpen() {
-    if (open) {
-      setOpen(false)
-      return
-    }
-    if (!url) {
-      try {
-        const result = await apiFetch<{ url: string; method: "GET"; expiresAt: string }>(
-          `/api/recordings/${recordingId}/playback`,
-        )
-        setUrl(result.url)
-      } catch {
-        setError("Could not start playback. Try again.")
-        return
-      }
-    }
-    setOpen(true)
-  }
-
-  return (
-    <div className="mt-2">
-      <div className="flex items-center gap-2">
-        <Button variant="outline" size="sm" onClick={() => void toggleOpen()}>
-          <PlayIcon aria-hidden />
-          {open ? "Hide video" : "Play here"}
-        </Button>
-        {error ? (
-          <span className="text-xs text-red-600 dark:text-red-400" role="alert">
-            {error}
-          </span>
-        ) : null}
-      </div>
-      {open && url ? (
-        <video
-          src={url}
-          controls
-          playsInline
-          className="mt-2 aspect-video w-full max-w-md rounded-md bg-black"
-          aria-label={`Stored recording from ${new Date(createdAt).toLocaleString()}`}
-        />
-      ) : null}
     </div>
   )
 }
