@@ -1,17 +1,21 @@
 import "server-only"
 import { randomBytes } from "node:crypto"
 import { eq } from "drizzle-orm"
+import { AppError, type YoutubeConnectionStatus } from "@speaking-track/contracts"
 import {
-  AppError,
-  SINGLETON_YOUTUBE_CONNECTION_ID,
-  type YoutubeConnectionStatus,
-} from "@speaking-track/contracts"
-import { youtubeConnections, type Db, type YoutubeConnection } from "@speaking-track/db"
+  user as userTable,
+  youtubeConnections,
+  youtubeOauthClients,
+  type Db,
+  type YoutubeConnection,
+} from "@speaking-track/db"
 import {
   buildAuthorizationUrl,
   createYoutubeClient,
+  decryptSecret,
   encryptSecret,
   exchangeAuthorizationCode,
+  parseEnvelope,
   serializeEnvelope,
   tokenSourceFromRefreshToken,
   YOUTUBE_SCOPES,
@@ -19,44 +23,94 @@ import {
 } from "@speaking-track/youtube"
 
 /**
- * Single-channel YouTube connection service (task 06). The OAuth state is a
- * cryptographically random nonce bound to the initiating admin session and
- * stored server-side with an expiry; the callback validates both.
+ * Per-user YouTube connection service. Each user:
+ *
+ * 1. enters their OWN Google OAuth client credentials on the settings page
+ *    (stored encrypted in `youtube_oauth_clients`) — or falls back to the
+ *    instance-wide GOOGLE_CLIENT_ID/SECRET env pair when set;
+ * 2. connects their own Google account, so their recordings upload to their
+ *    own channel.
+ *
+ * The OAuth state is a cryptographically random nonce bound to the
+ * initiating user session and stored server-side with an expiry; the
+ * callback validates both.
  */
 
 const STATE_TTL_MS = 10 * 60 * 1000
 
-type PendingState = { adminUserId: string; nonce: string; expiresAt: number }
+type PendingState = { userId: string; nonce: string; expiresAt: number }
 
 const pendingStates = new Map<string, PendingState>()
 
-export type YoutubeEnv = {
-  googleClientId: string
-  googleClientSecret: string
-  redirectUri: string
-  tokenEncryptionKey: string
+export type YoutubeClientConfig = {
+  clientId: string
+  clientSecret: string
 }
 
-export function readYoutubeEnv(env: Record<string, string | undefined> = process.env): YoutubeEnv {
-  const required = [
-    "GOOGLE_CLIENT_ID",
-    "GOOGLE_CLIENT_SECRET",
-    "GOOGLE_REDIRECT_URI",
-    "YOUTUBE_TOKEN_ENCRYPTION_KEY",
-  ]
-  const missing = required.filter((key) => !env[key])
-  if (missing.length > 0) {
-    throw new AppError(
-      "YOUTUBE_NOT_CONNECTED",
-      `YouTube is not configured: missing ${missing.join(", ")}.`,
-    )
+function tokenEncryptionKey(env: Record<string, string | undefined> = process.env): string {
+  return env.YOUTUBE_TOKEN_ENCRYPTION_KEY ?? ""
+}
+
+/** OAuth redirect URI: derived from APP_ORIGIN, env override wins. */
+export function redirectUri(env: Record<string, string | undefined> = process.env): string {
+  if (env.GOOGLE_REDIRECT_URI) return env.GOOGLE_REDIRECT_URI
+  const origin = env.APP_ORIGIN ?? "https://localhost"
+  return `${origin.replace(/\/$/, "")}/api/youtube/callback`
+}
+
+/**
+ * Resolved client credentials for a user: their stored row first, the
+ * instance env pair as fallback. Null when neither is configured.
+ */
+export async function resolveClientConfig(
+  db: Db,
+  userId: string,
+  env: Record<string, string | undefined> = process.env,
+): Promise<YoutubeClientConfig | null> {
+  const [row] = await db
+    .select()
+    .from(youtubeOauthClients)
+    .where(eq(youtubeOauthClients.userId, userId))
+  if (row) {
+    const secret = decryptSecret(parseEnvelope(row.encryptedClientSecret), tokenEncryptionKey(env))
+    return { clientId: row.clientId, clientSecret: secret }
   }
-  return {
-    googleClientId: env.GOOGLE_CLIENT_ID!,
-    googleClientSecret: env.GOOGLE_CLIENT_SECRET!,
-    redirectUri: env.GOOGLE_REDIRECT_URI!,
-    tokenEncryptionKey: env.YOUTUBE_TOKEN_ENCRYPTION_KEY!,
+  if (env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) {
+    return { clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET }
   }
+  return null
+}
+
+/** Saves (or replaces) the user's own OAuth client credentials. */
+export async function saveClientConfig(
+  db: Db,
+  input: { userId: string; clientId: string; clientSecret: string },
+  env: Record<string, string | undefined> = process.env,
+): Promise<void> {
+  const encrypted = serializeEnvelope(encryptSecret(input.clientSecret, tokenEncryptionKey(env)))
+  const now = new Date()
+  await db
+    .insert(youtubeOauthClients)
+    .values({
+      userId: input.userId,
+      clientId: input.clientId,
+      encryptedClientSecret: encrypted,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: youtubeOauthClients.userId,
+      set: {
+        clientId: input.clientId,
+        encryptedClientSecret: encrypted,
+        updatedAt: now,
+      },
+    })
+}
+
+/** Clears the user's stored credentials (falls back to env pair if set). */
+export async function clearClientConfig(db: Db, userId: string): Promise<void> {
+  await db.delete(youtubeOauthClients).where(eq(youtubeOauthClients.userId, userId))
 }
 
 export type ConnectionStatusView = {
@@ -64,37 +118,64 @@ export type ConnectionStatusView = {
   channelId: string | null
   channelTitle: string | null
   lastVerifiedAt: string | null
+  /** Whether usable OAuth client credentials are available for this user. */
+  hasClientConfig: boolean
+  /** Redirect URI the user must register in their Google Cloud project. */
+  redirectUri: string
 }
 
-export async function getConnectionStatus(db: Db): Promise<ConnectionStatusView> {
+export async function getConnectionStatus(
+  db: Db,
+  userId: string,
+  env: Record<string, string | undefined> = process.env,
+): Promise<ConnectionStatusView> {
   const [connection] = await db
     .select()
     .from(youtubeConnections)
-    .where(eq(youtubeConnections.id, SINGLETON_YOUTUBE_CONNECTION_ID))
+    .where(eq(youtubeConnections.id, userId))
+  const config = await resolveClientConfig(db, userId, env)
+  const base = {
+    hasClientConfig: config !== null,
+    redirectUri: redirectUri(env),
+  }
   if (!connection) {
-    return { status: "UNCONNECTED", channelId: null, channelTitle: null, lastVerifiedAt: null }
+    return {
+      status: config ? "UNCONNECTED" : "NOT_CONFIGURED",
+      channelId: null,
+      channelTitle: null,
+      lastVerifiedAt: null,
+      ...base,
+    }
   }
   return {
     status: connection.status,
     channelId: connection.channelId,
     channelTitle: connection.channelTitle,
     lastVerifiedAt: connection.lastVerifiedAt?.toISOString() ?? null,
+    ...base,
   }
 }
 
 export async function createConnectUrl(
   db: Db,
-  env: YoutubeEnv,
-  adminUserId: string,
+  userId: string,
+  env: Record<string, string | undefined> = process.env,
 ): Promise<string> {
+  const config = await resolveClientConfig(db, userId, env)
+  if (!config) {
+    throw new AppError(
+      "YOUTUBE_NOT_CONNECTED",
+      "Save your Google OAuth client ID and secret first.",
+    )
+  }
   const nonce = randomBytes(24).toString("base64url")
   const key = randomBytes(12).toString("base64url")
-  pendingStates.set(key, { adminUserId, nonce, expiresAt: Date.now() + STATE_TTL_MS })
+  pendingStates.set(key, { userId, nonce, expiresAt: Date.now() + STATE_TTL_MS })
   pruneStates()
 
   return buildAuthorizationUrl({
-    clientId: env.googleClientId,
-    redirectUri: env.redirectUri,
+    clientId: config.clientId,
+    redirectUri: redirectUri(env),
     state: `${key}.${nonce}`,
     scopes: YOUTUBE_SCOPES,
   })
@@ -102,8 +183,8 @@ export async function createConnectUrl(
 
 export async function completeConnect(
   db: Db,
-  env: YoutubeEnv,
-  input: { state: string; code: string; adminUserId: string },
+  input: { state: string; code: string; userId: string },
+  env: Record<string, string | undefined> = process.env,
   transport?: YoutubeHttpTransport,
 ): Promise<ConnectionStatusView> {
   const [key, nonce] = input.state.split(".") as [string, string | undefined]
@@ -111,7 +192,7 @@ export async function completeConnect(
   if (
     !pending ||
     pending.nonce !== nonce ||
-    pending.adminUserId !== input.adminUserId ||
+    pending.userId !== input.userId ||
     pending.expiresAt < Date.now()
   ) {
     throw new AppError(
@@ -120,6 +201,11 @@ export async function completeConnect(
     )
   }
   pendingStates.delete(key)
+
+  const config = await resolveClientConfig(db, input.userId, env)
+  if (!config) {
+    throw new AppError("YOUTUBE_NOT_CONNECTED", "Save your OAuth client credentials first.")
+  }
 
   const tokenTransport =
     transport ??
@@ -136,9 +222,9 @@ export async function completeConnect(
     })
 
   const tokens = await exchangeAuthorizationCode({
-    clientId: env.googleClientId,
-    clientSecret: env.googleClientSecret,
-    redirectUri: env.redirectUri,
+    clientId: config.clientId,
+    clientSecret: config.clientSecret,
+    redirectUri: redirectUri(env),
     code: input.code,
     transport: tokenTransport,
   })
@@ -151,25 +237,25 @@ export async function completeConnect(
 
   const client = createYoutubeClient(
     tokenSourceFromRefreshToken({
-      clientId: env.googleClientId,
-      clientSecret: env.googleClientSecret,
+      clientId: config.clientId,
+      clientSecret: config.clientSecret,
       refreshToken: tokens.refresh_token,
     }),
   )
   const channel = await client.getChannel()
 
-  const encrypted = serializeEnvelope(encryptSecret(tokens.refresh_token, env.tokenEncryptionKey))
+  const encrypted = serializeEnvelope(encryptSecret(tokens.refresh_token, tokenEncryptionKey(env)))
   const now = new Date()
   await db
     .insert(youtubeConnections)
     .values({
-      id: SINGLETON_YOUTUBE_CONNECTION_ID,
+      id: input.userId,
       channelId: channel.id,
       channelTitle: channel.title,
       encryptedRefreshToken: encrypted,
       scope: tokens.scope,
       status: "CONNECTED",
-      connectedByUserId: input.adminUserId,
+      connectedByUserId: input.userId,
       lastVerifiedAt: now,
       createdAt: now,
       updatedAt: now,
@@ -182,15 +268,15 @@ export async function completeConnect(
         encryptedRefreshToken: encrypted,
         scope: tokens.scope,
         status: "CONNECTED",
-        connectedByUserId: input.adminUserId,
+        connectedByUserId: input.userId,
         lastVerifiedAt: now,
         updatedAt: now,
       },
     })
-  return getConnectionStatus(db)
+  return getConnectionStatus(db, input.userId, env)
 }
 
-export async function disconnect(db: Db): Promise<ConnectionStatusView> {
+export async function disconnect(db: Db, userId: string): Promise<ConnectionStatusView> {
   // Removes usable token material; existing YouTube videos stay untouched.
   await db
     .update(youtubeConnections)
@@ -199,8 +285,47 @@ export async function disconnect(db: Db): Promise<ConnectionStatusView> {
       encryptedRefreshToken: "DISCONNECTED",
       updatedAt: new Date(),
     })
-    .where(eq(youtubeConnections.id, SINGLETON_YOUTUBE_CONNECTION_ID))
-  return getConnectionStatus(db)
+    .where(eq(youtubeConnections.id, userId))
+  return getConnectionStatus(db, userId)
+}
+
+export type AdminConnectionRow = {
+  userId: string
+  ownerEmail: string | null
+  ownerName: string | null
+  status: YoutubeConnectionStatus
+  channelId: string | null
+  channelTitle: string | null
+  hasOwnClient: boolean
+  updatedAt: string | null
+}
+
+/** Admin overview: every user's connection state plus client-config flag. */
+export async function listConnections(db: Db): Promise<AdminConnectionRow[]> {
+  const rows = await db
+    .select({
+      userId: youtubeConnections.id,
+      ownerEmail: userTable.email,
+      ownerName: userTable.name,
+      status: youtubeConnections.status,
+      channelId: youtubeConnections.channelId,
+      channelTitle: youtubeConnections.channelTitle,
+      updatedAt: youtubeConnections.updatedAt,
+    })
+    .from(youtubeConnections)
+    .leftJoin(userTable, eq(userTable.id, youtubeConnections.id))
+  const clients = await db.select().from(youtubeOauthClients)
+  const ownClientIds = new Set(clients.map((row) => row.userId))
+  return rows.map((row) => ({
+    userId: row.userId,
+    ownerEmail: row.ownerEmail,
+    ownerName: row.ownerName,
+    status: row.status,
+    channelId: row.channelId,
+    channelTitle: row.channelTitle,
+    hasOwnClient: ownClientIds.has(row.userId),
+    updatedAt: row.updatedAt?.toISOString() ?? null,
+  }))
 }
 
 function pruneStates(): void {
