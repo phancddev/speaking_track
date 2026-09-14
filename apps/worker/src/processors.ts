@@ -194,15 +194,21 @@ export async function handleUpload(ctx: UploadContext): Promise<void> {
         })
         .where(eq(recordings.id, recording.id))
     }
-
-    // Resolve outstanding bytes before sending (resume-or-continue).
-    const status = await youtube.queryUploadStatus(sessionUri).catch((error: unknown) => error)
-    if (status instanceof Error && /expired/.test(status.message)) {
-      // Session expired with an unknowable outcome: fail CLOSED.
-      await failAmbiguous(db, recording)
-      return
+    // Resume-or-continue: a FRESH session (just initialized above) is known
+    // empty — probing it with a zero-total Content-Range poisons the upload
+    // ("processing abandoned"), so only persisted sessions are probed, and
+    // always with the declared total.
+    const resumingSession = Boolean(recording.youtubeUploadSessionUriEncrypted)
+    if (resumingSession) {
+      const status = await youtube
+        .queryUploadStatus(sessionUri, Number(recording.sizeBytes))
+        .catch((error: unknown) => error)
+      if (status instanceof Error && /expired/.test(status.message)) {
+        // Session expired with an unknowable outcome: fail CLOSED.
+        await failAmbiguous(db, recording)
+        return
+      }
     }
-
     const bytes = await readObjectBytes(ctx, recording)
     let send: { status: number; body: string }
     try {

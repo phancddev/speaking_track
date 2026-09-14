@@ -93,9 +93,15 @@ export type YoutubeClient = {
     contentType: string
     sizeBytes: number
   }): Promise<string>
-  /** Queries how many bytes the session already holds (308 response). */
+  /**
+   * Queries how many bytes the session already holds (308 response). Pass
+   * the declared total: the probe MUST advertise "bytes STAR total" — a
+   * zero-total probe tells the provider the upload is zero bytes long and
+   * poisons the session ("processing abandoned").
+   */
   queryUploadStatus(
     sessionUri: string,
+    totalBytes?: number,
   ): Promise<{ bytesReceived: number; complete: boolean; finalBody?: string }>
   /** Streams the media into an open session. */
   sendMedia(input: {
@@ -171,10 +177,12 @@ export function createYoutubeClient(
       return sessionUri
     },
 
-    async queryUploadStatus(sessionUri) {
+    async queryUploadStatus(sessionUri, totalBytes) {
+      // `bytes */<total>` per the resumable protocol; `*/0` would declare a
+      // zero-byte upload and poison the session.
       const response = await transport(sessionUri, {
         method: "PUT",
-        headers: { "content-range": "bytes */0" },
+        headers: { "content-range": `bytes */${totalBytes ?? 0}` },
       })
       if (response.status === 308) {
         const range = response.headers["range"]
