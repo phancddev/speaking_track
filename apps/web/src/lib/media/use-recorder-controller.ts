@@ -23,7 +23,12 @@ export type RecorderController = {
   elapsedMs: number
   mimeType: SupportedRecordingMimeType | null
   error: string | null
+  /** Frame flips applied to the preview and baked into recordings. */
+  flipH: boolean
+  flipV: boolean
   requestPermission: () => void
+  toggleFlipH: () => void
+  toggleFlipV: () => void
   start: () => void
   stop: () => Promise<RecordingCapture | null>
   reset: () => void
@@ -55,8 +60,12 @@ export function useRecorderController(): RecorderController {
   const [elapsedMs, setElapsedMs] = useState(0)
   const [mimeType, setMimeType] = useState<SupportedRecordingMimeType | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [flipH, setFlipH] = useState(false)
+  const [flipV, setFlipV] = useState(false)
 
   const recorderRef = useRef<MediaRecorder | null>(null)
+  /** Live canvas pipeline (flip baking); torn down with the recorder. */
+  const pipelineRef = useRef<{ stop: () => void } | null>(null)
   const chunksRef = useRef<Blob[]>([])
   const startedAtRef = useRef<number | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -75,6 +84,8 @@ export function useRecorderController(): RecorderController {
   }, [])
 
   const teardownRecorder = useCallback(() => {
+    pipelineRef.current?.stop()
+    pipelineRef.current = null
     if (timerRef.current) {
       clearInterval(timerRef.current)
       timerRef.current = null
@@ -119,7 +130,55 @@ export function useRecorderController(): RecorderController {
   const start = useCallback(() => {
     if (!stream || recording || !mimeType) return
     chunksRef.current = []
-    const recorder = new MediaRecorder(stream, { mimeType })
+
+    // Flip baking: when a flip is active, record a rotated canvas render of
+    // the camera (plus the original audio) instead of the raw stream, so the
+    // SAVED file — and therefore the YouTube upload — is already upright.
+    let recordStream = stream
+    if (flipH || flipV) {
+      const source = document.createElement("video")
+      source.srcObject = stream
+      source.muted = true
+      source.playsInline = true
+      void source.play().catch(() => undefined)
+      const track = stream.getVideoTracks()[0]
+      const settings = track?.getSettings() ?? {}
+      const width = Number(settings.width) || 640
+      const height = Number(settings.height) || 480
+      const canvas = document.createElement("canvas")
+      canvas.width = width
+      canvas.height = height
+      const ctx = canvas.getContext("2d")
+      if (ctx) {
+        let running = true
+        const draw = () => {
+          if (!running) return
+          if (source.readyState >= 2) {
+            ctx.save()
+            ctx.translate(flipH ? width : 0, flipV ? height : 0)
+            ctx.scale(flipH ? -1 : 1, flipV ? -1 : 1)
+            ctx.drawImage(source, 0, 0, width, height)
+            ctx.restore()
+          }
+          requestAnimationFrame(draw)
+        }
+        requestAnimationFrame(draw)
+        const canvasStream = canvas.captureStream(30)
+        recordStream = new MediaStream([
+          ...canvasStream.getVideoTracks(),
+          ...stream.getAudioTracks(),
+        ])
+        pipelineRef.current = {
+          stop() {
+            running = false
+            canvasStream.getTracks().forEach((canvasTrack) => canvasTrack.stop())
+            source.srcObject = null
+          },
+        }
+      }
+    }
+
+    const recorder = new MediaRecorder(recordStream, { mimeType })
     recorder.addEventListener("dataavailable", (event: BlobEvent) => {
       if (event.data.size > 0) chunksRef.current.push(event.data)
     })
@@ -138,7 +197,7 @@ export function useRecorderController(): RecorderController {
         setElapsedMs(performance.now() - startedAtRef.current)
       }
     }, 250)
-  }, [stream, recording, mimeType, teardownRecorder])
+  }, [stream, recording, mimeType, flipH, flipV, teardownRecorder])
 
   const stop = useCallback(() => {
     return new Promise<RecordingCapture | null>((resolve) => {
@@ -198,6 +257,10 @@ export function useRecorderController(): RecorderController {
     mimeType,
     error,
     requestPermission,
+    flipH,
+    flipV,
+    toggleFlipH: () => setFlipH((current) => !current),
+    toggleFlipV: () => setFlipV((current) => !current),
     start,
     stop,
     reset,

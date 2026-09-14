@@ -3,6 +3,8 @@
 import {
   CircleAlertIcon,
   CircleStopIcon,
+  FlipHorizontalIcon,
+  FlipVerticalIcon,
   ExternalLinkIcon,
   LoaderCircleIcon,
   MicIcon,
@@ -423,6 +425,11 @@ function RecorderPanel({
                     element.srcObject = recorder.stream
                   }
                 }}
+                style={{
+                  transform:
+                    `${recorder.flipH ? "scaleX(-1) " : ""}${recorder.flipV ? "scaleY(-1)" : ""}`.trim() ||
+                    undefined,
+                }}
                 className="aspect-video w-full rounded-md bg-black"
                 aria-label="Camera preview"
               />
@@ -437,6 +444,26 @@ function RecorderPanel({
               </p>
             ) : null}
             <div className="flex flex-wrap gap-2">
+              <Button
+                variant={recorder.flipH ? "default" : "outline"}
+                size="icon"
+                aria-label="Flip camera horizontally"
+                aria-pressed={recorder.flipH}
+                disabled={recorder.recording}
+                onClick={recorder.toggleFlipH}
+              >
+                <FlipHorizontalIcon aria-hidden />
+              </Button>
+              <Button
+                variant={recorder.flipV ? "default" : "outline"}
+                size="icon"
+                aria-label="Flip camera vertically"
+                aria-pressed={recorder.flipV}
+                disabled={recorder.recording}
+                onClick={recorder.toggleFlipV}
+              >
+                <FlipVerticalIcon aria-hidden />
+              </Button>
               {!recorder.recording ? (
                 <Button onClick={recorder.start} disabled={!recorder.mimeType}>
                   <MicIcon aria-hidden />
