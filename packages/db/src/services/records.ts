@@ -1,9 +1,8 @@
-import { and, eq, sql } from "drizzle-orm"
+import { and, asc, eq, sql } from "drizzle-orm"
 import type { SupportedRecordingMimeType } from "@speaking-track/contracts"
 import type { DbExecutor } from "../client"
 import {
   drafts,
-  questions,
   recordings,
   tags,
   topics,
@@ -148,37 +147,126 @@ async function classifyAttachFailure(
   return topic.ownerId === tag.ownerId ? "topic_not_found" : "owner_mismatch"
 }
 
-export type UpsertDraftResult =
-  { ok: true; draft: Draft } | { ok: false; reason: "question_not_found" }
+export type DraftFailure = OwnershipFailure
 
-/**
- * Upserts the one draft belonging to a question (PK = questionId). Empty
- * content is valid. A missing question is reported instead of surfacing a
- * raw FK violation.
- */
-export async function upsertDraft(
+export type DraftListResult =
+  { ok: true; drafts: Draft[] } | { ok: false; reason: "question_not_found" | "owner_mismatch" }
+
+/** A question may hold many drafts; ordering is `position` then age. */
+export async function listDrafts(
   db: DbExecutor,
-  input: { questionId: string; content: string },
-): Promise<UpsertDraftResult> {
-  const [question] = await db
-    .select({ id: questions.id })
-    .from(questions)
-    .where(and(eq(questions.id, input.questionId), sql`${questions.deletedAt} is null`))
-    .limit(1)
-  if (!question) {
+  input: { questionId: string; ownerId: string },
+): Promise<DraftListResult> {
+  const owned = await db.execute(sql`
+    select d.id
+    from drafts d
+    join questions q on q.id = d.question_id
+    join topics t on t.id = q.topic_id
+    where d.question_id = ${input.questionId}
+      and q.deleted_at is null
+      and t.deleted_at is null
+      and t.owner_id = ${input.ownerId}
+    limit 1
+  `)
+  if (!(owned as unknown as { id: string }[]).length) {
     return { ok: false, reason: "question_not_found" }
   }
-  const upserted = await db
-    .insert(drafts)
-    .values({ questionId: input.questionId, content: input.content, updatedAt: new Date() })
-    .onConflictDoUpdate({
-      target: drafts.questionId,
-      set: { content: input.content, updatedAt: new Date() },
-    })
-    .returning()
-  const draft = upserted[0]
+  const rows = await db
+    .select()
+    .from(drafts)
+    .where(eq(drafts.questionId, input.questionId))
+    .orderBy(asc(drafts.position), asc(drafts.updatedAt))
+  return { ok: true, drafts: rows }
+}
+
+/**
+ * Appends a draft to a question. The INSERT only fires when the joined
+ * topic owner matches, so the client cannot target a foreign question.
+ */
+export async function createDraft(
+  db: DbExecutor,
+  input: { questionId: string; ownerId: string; title: string | null; content: string },
+): Promise<{ ok: true; draft: Draft } | DraftFailure> {
+  const inserted = await db.execute(sql`
+    insert into drafts (question_id, title, content, position, updated_at)
+    select q.id, ${input.title}, ${input.content},
+      coalesce((select max(d.position) + 1 from drafts d where d.question_id = q.id), 0),
+      now()
+    from questions q
+    join topics t on t.id = q.topic_id
+    where q.id = ${input.questionId}
+      and q.deleted_at is null
+      and t.deleted_at is null
+      and t.owner_id = ${input.ownerId}
+    returning id
+  `)
+  const row = (inserted as unknown as { id: string }[])[0]
+  if (!row) {
+    return { ok: false, reason: await classifyRecordingFailure(db, input) }
+  }
+  const [draft] = await db.select().from(drafts).where(eq(drafts.id, row.id)).limit(1)
   if (!draft) {
-    throw new Error("draft upsert returned no row")
+    throw new Error("draft insert returned no row")
   }
   return { ok: true, draft }
+}
+
+export type DraftUpdateResult =
+  { ok: true; draft: Draft } | { ok: false; reason: "draft_not_found" | "owner_mismatch" }
+
+/** Partial update: only provided fields change; `title: null` clears it. */
+export async function updateDraft(
+  db: DbExecutor,
+  input: {
+    draftId: string
+    ownerId: string
+    title?: string | null
+    content?: string
+  },
+): Promise<DraftUpdateResult> {
+  const assignments = [sql`updated_at = now()`]
+  if (input.title !== undefined) {
+    assignments.push(sql`title = ${input.title}`)
+  }
+  if (input.content !== undefined) {
+    assignments.push(sql`content = ${input.content}`)
+  }
+  const updated = await db.execute(sql`
+    update drafts d set ${sql.join(assignments, sql`, `)}
+    from questions q
+    join topics t on t.id = q.topic_id
+    where d.id = ${input.draftId}
+      and d.question_id = q.id
+      and q.deleted_at is null
+      and t.deleted_at is null
+      and t.owner_id = ${input.ownerId}
+    returning d.id
+  `)
+  if (!(updated as unknown as { id: string }[]).length) {
+    return { ok: false, reason: "draft_not_found" }
+  }
+  const [draft] = await db.select().from(drafts).where(eq(drafts.id, input.draftId)).limit(1)
+  if (!draft) {
+    throw new Error("draft update returned no row")
+  }
+  return { ok: true, draft }
+}
+
+/** Deleting a draft never touches the question; already-gone is success. */
+export async function deleteDraft(
+  db: DbExecutor,
+  input: { draftId: string; ownerId: string },
+): Promise<{ ok: true; deleted: boolean }> {
+  const deleted = await db.execute(sql`
+    delete from drafts d
+    using questions q
+    join topics t on t.id = q.topic_id
+    where d.id = ${input.draftId}
+      and d.question_id = q.id
+      and q.deleted_at is null
+      and t.deleted_at is null
+      and t.owner_id = ${input.ownerId}
+    returning d.id
+  `)
+  return { ok: true, deleted: Boolean((deleted as unknown as { id: string }[]).length) }
 }

@@ -101,12 +101,33 @@ export const QuestionUpdateSchema = z
 export type QuestionCreateInput = z.infer<typeof QuestionCreateSchema>
 export type QuestionUpdateInput = z.infer<typeof QuestionUpdateSchema>
 
-/** Draft content: max 100,000 chars; empty string is valid. */
-export const DraftUpsertSchema = z.strictObject({
+/** Optional draft label; empty strings normalize to null. */
+const draftTitle = z
+  .string()
+  .max(200)
+  .transform((value) => (value.trim() === "" ? null : value))
+
+/** Draft create: a question may hold many drafts; content max 100,000 chars. */
+export const DraftCreateSchema = z.strictObject({
+  title: draftTitle.optional(),
   content: z.string().max(100000),
 })
 
-export type DraftUpsertInput = z.infer<typeof DraftUpsertSchema>
+/**
+ * Draft update: partial by field. `title: null` clears the label while
+ * omitting it leaves the label untouched.
+ */
+export const DraftUpdateSchema = z
+  .strictObject({
+    title: draftTitle.nullable().optional(),
+    content: z.string().max(100000).optional(),
+  })
+  .refine((value) => value.title !== undefined || value.content !== undefined, {
+    message: "Provide at least one field to update.",
+  })
+
+export type DraftCreateInput = z.infer<typeof DraftCreateSchema>
+export type DraftUpdateInput = z.infer<typeof DraftUpdateSchema>
 
 /**
  * Create-upload request after local recording stops. `sizeBytes` is bounded

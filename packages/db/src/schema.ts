@@ -248,15 +248,23 @@ export const questions = pgTable(
 export const drafts = pgTable(
   "drafts",
   {
-    /** PK and FK: exactly one draft per question. */
+    id: uuid("id").primaryKey().defaultRandom(),
     questionId: uuid("question_id")
-      .primaryKey()
+      .notNull()
       .references(() => questions.id, { onDelete: "cascade" }),
+    /** Optional per-draft label; max 200 chars, empty treated as null. */
+    title: text("title"),
     /** Max 100,000 chars; empty string is valid. */
     content: text("content").notNull().default(""),
+    /** Per-question ordering for a stable list. */
+    position: integer("position").notNull().default(0),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (_table) => [check("drafts_content_length_check", charLengthAtMost("content", 100000))],
+  (table) => [
+    index("drafts_question_position_idx").on(table.questionId, table.position),
+    check("drafts_content_length_check", charLengthAtMost("content", 100000)),
+    check("drafts_title_length_check", charLengthAtMost("title", 200)),
+  ],
 )
 
 export const recordings = pgTable(

@@ -3,7 +3,8 @@ import {
   APP_ERROR_CODES,
   AppError,
   ConfigurationError,
-  DraftUpsertSchema,
+  DraftCreateSchema,
+  DraftUpdateSchema,
   EmptyJobSchema,
   JOB_NAMES,
   JOB_PAYLOAD_SCHEMAS,
@@ -203,10 +204,23 @@ describe("DTO bounds", () => {
     expect(QuestionCreateSchema.safeParse({ prompt: "p", position: 1.5 }).success).toBe(false)
   })
 
-  it("draft content max 100000 with empty string valid", () => {
-    expect(DraftUpsertSchema.safeParse({ content: "" }).success).toBe(true)
-    expect(DraftUpsertSchema.safeParse({ content: "x".repeat(100000) }).success).toBe(true)
-    expect(DraftUpsertSchema.safeParse({ content: "x".repeat(100001) }).success).toBe(false)
+  it("draft create: content max 100000, blank titles normalize to null", () => {
+    expect(DraftCreateSchema.safeParse({ content: "" }).success).toBe(true)
+    expect(DraftCreateSchema.safeParse({ title: "  ", content: "x" }).data?.title).toBeNull()
+    expect(
+      DraftCreateSchema.safeParse({ title: "t".repeat(200), content: "x".repeat(100000) }).success,
+    ).toBe(true)
+    expect(DraftCreateSchema.safeParse({ title: "t".repeat(201), content: "x" }).success).toBe(
+      false,
+    )
+    expect(DraftCreateSchema.safeParse({ content: "x".repeat(100001) }).success).toBe(false)
+  })
+
+  it("draft update: null clears title, omitted fields stay, at least one field", () => {
+    expect(DraftUpdateSchema.safeParse({ title: null }).success).toBe(true)
+    expect(DraftUpdateSchema.safeParse({ content: "v2" }).success).toBe(true)
+    expect(DraftUpdateSchema.safeParse({}).success).toBe(false)
+    expect(DraftUpdateSchema.safeParse({ title: "  " }).data?.title).toBeNull()
   })
 
   it("recording upload request enforces supported mime, size, and duration bounds", () => {

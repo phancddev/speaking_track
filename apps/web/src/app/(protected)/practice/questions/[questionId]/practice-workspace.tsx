@@ -23,6 +23,7 @@ import { useRecorderController } from "@/lib/media/use-recorder-controller"
 import { uploadRecordingBlob } from "@/lib/media/upload-transport"
 import { trimRecording } from "@/lib/media/trim"
 import type { RecordingView } from "@/lib/services/recordings"
+import { DraftsPanel, type DraftView } from "./drafts-panel"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -36,7 +37,6 @@ import {
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
-import { Textarea } from "@/components/ui/textarea"
 
 /**
  * Practice workspace (task 07 / plan/03 § Practice workspace): two-column
@@ -74,43 +74,14 @@ const NON_TERMINAL_STATES: RecordingState[] = [
 
 export function PracticeWorkspace({
   question,
-  initialDraft,
+  initialDrafts,
   initialRecordings,
 }: {
   question: QuestionSummary
-  initialDraft: string
+  initialDrafts: DraftView[]
   initialRecordings: RecordingView[]
 }) {
   const pathname = usePathname()
-
-  // ---- Draft editor state -------------------------------------------------
-  const [draft, setDraft] = useState(initialDraft)
-  const [savedDraft, setSavedDraft] = useState(initialDraft)
-  const [draftSaving, setDraftSaving] = useState(false)
-  const [draftError, setDraftError] = useState<string | null>(null)
-  const [savedAt, setSavedAt] = useState<string | null>(null)
-  const dirty = draft !== savedDraft
-
-  const saveDraft = useCallback(async () => {
-    if (draftSaving) return
-    setDraftSaving(true)
-    setDraftError(null)
-    try {
-      const result = await apiFetch<{ saved: boolean; updatedAt: string }>(
-        `/api/questions/${question.id}/draft`,
-        { method: "PUT", body: JSON.stringify({ content: draft }) },
-      )
-      setSavedDraft(draft)
-      setSavedAt(new Date(result.updatedAt).toLocaleTimeString())
-    } catch (cause) {
-      // Failure keeps the editor content intact and retryable.
-      setDraftError(
-        cause instanceof ApiError ? cause.message : "Could not save the draft. Try again.",
-      )
-    } finally {
-      setDraftSaving(false)
-    }
-  }, [draft, draftSaving, question.id])
 
   // ---- Recorder state -----------------------------------------------------
   const recorder = useRecorderController()
@@ -157,7 +128,7 @@ export function PracticeWorkspace({
     }
   }, [recordings, reloadRecordings])
 
-  // ---- Route-change cleanup + dirty guard ---------------------------------
+  // ---- Route-change cleanup + unsaved-work guard ---------------------------
   useEffect(() => {
     return () => {
       recorder.reset()
@@ -165,14 +136,15 @@ export function PracticeWorkspace({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pathname])
 
+  const [draftFormOpen, setDraftFormOpen] = useState(false)
   useEffect(() => {
-    if (!dirty && !recorder.recording) return
+    if (!draftFormOpen && !recorder.recording) return
     const handler = (event: BeforeUnloadEvent) => {
       event.preventDefault()
     }
     window.addEventListener("beforeunload", handler)
     return () => window.removeEventListener("beforeunload", handler)
-  }, [dirty, recorder.recording])
+  }, [draftFormOpen, recorder.recording])
 
   async function onStop() {
     const result = await recorder.stop()
@@ -266,48 +238,11 @@ export function PracticeWorkspace({
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader className="flex-row items-center justify-between">
-              <CardTitle className="text-lg font-semibold">Draft</CardTitle>
-              <div className="flex items-center gap-2">
-                {savedAt ? (
-                  <span className="text-muted-foreground text-xs">Saved at {savedAt}</span>
-                ) : null}
-                <Button size="sm" onClick={() => void saveDraft()} disabled={draftSaving || !dirty}>
-                  {draftSaving ? (
-                    <>
-                      <LoaderCircleIcon aria-hidden className="animate-spin" />
-                      Saving…
-                    </>
-                  ) : (
-                    "Save draft"
-                  )}
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-2">
-              <Label htmlFor="draft-content" className="sr-only">
-                Draft notes
-              </Label>
-              <Textarea
-                id="draft-content"
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                rows={12}
-                maxLength={100000}
-                placeholder="Plan your answer…"
-                aria-description={dirty ? "Unsaved changes" : undefined}
-              />
-              {draftError ? (
-                <Alert variant="destructive">
-                  <CircleAlertIcon aria-hidden />
-                  <AlertTitle>Save failed</AlertTitle>
-                  <AlertDescription>{draftError}</AlertDescription>
-                </Alert>
-              ) : null}
-              {dirty ? <p className="text-muted-foreground text-xs">Unsaved changes</p> : null}
-            </CardContent>
-          </Card>
+          <DraftsPanel
+            questionId={question.id}
+            initialDrafts={initialDrafts}
+            onFormOpenChange={setDraftFormOpen}
+          />
         </section>
 
         <section aria-label="Recorder and attempts" className="flex flex-col gap-4">

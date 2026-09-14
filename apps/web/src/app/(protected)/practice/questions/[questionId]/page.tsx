@@ -1,4 +1,4 @@
-import { and, eq, isNull } from "drizzle-orm"
+import { and, asc, eq, isNull } from "drizzle-orm"
 import { notFound } from "next/navigation"
 import { headers } from "next/headers"
 import { requireSession, resolveOwnerScope } from "@/lib/auth/authorization"
@@ -9,7 +9,7 @@ import { PracticeWorkspace } from "./practice-workspace"
 
 /**
  * Practice workspace (task 07): one owner-authorized server composition for
- * question/topic/draft/recordings. Missing/foreign resources share the same
+ * question/topic/drafts/recordings. Missing/foreign resources share the same
  * safe not-found behavior.
  */
 export default async function PracticePage({
@@ -22,14 +22,9 @@ export default async function PracticePage({
   const db = getDb()
 
   const [row] = await db
-    .select({
-      question: questions,
-      topic: topics,
-      draft: drafts,
-    })
+    .select({ question: questions, topic: topics })
     .from(questions)
     .innerJoin(topics, eq(topics.id, questions.topicId))
-    .leftJoin(drafts, eq(drafts.questionId, questions.id))
     .where(
       and(
         eq(questions.id, questionId),
@@ -42,7 +37,19 @@ export default async function PracticePage({
   if (!row) {
     notFound()
   }
-  const recordings = await listRecordingsForQuestion(db, { ownerId, questionId })
+  const [questionDrafts, recordings] = await Promise.all([
+    db
+      .select({
+        id: drafts.id,
+        title: drafts.title,
+        content: drafts.content,
+        updatedAt: drafts.updatedAt,
+      })
+      .from(drafts)
+      .where(eq(drafts.questionId, questionId))
+      .orderBy(asc(drafts.position), asc(drafts.updatedAt)),
+    listRecordingsForQuestion(db, { ownerId, questionId }),
+  ])
   return (
     <PracticeWorkspace
       question={{
@@ -52,7 +59,7 @@ export default async function PracticePage({
         topicId: row.topic.id,
         topicTitle: row.topic.title,
       }}
-      initialDraft={row.draft?.content ?? ""}
+      initialDrafts={questionDrafts}
       initialRecordings={recordings}
     />
   )

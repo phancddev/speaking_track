@@ -10,7 +10,10 @@ import {
   insertOutboxEvent,
   insertRecording,
   transitionRecordingStatus,
-  upsertDraft,
+  createDraft,
+  listDrafts,
+  updateDraft,
+  deleteDraft,
   withTransaction,
   type DbClient,
   type OutboxEvent,
@@ -213,29 +216,101 @@ describe("recording owner invariant", () => {
   })
 })
 
-describe("one draft per question with empty content accepted", () => {
-  it("upserts a single row and accepts the empty string", async () => {
+describe("multi-draft per question with optional titles", () => {
+  it("appends drafts in order and accepts empty content", async () => {
     const { questionId } = await seedOwnerWithTopicAndQuestion()
-    const first = await upsertDraft(client.db, { questionId, content: "" })
-    const second = await upsertDraft(client.db, { questionId, content: "idea" })
+    const first = await createDraft(client.db, {
+      questionId,
+      ownerId: OWNER_A,
+      title: null,
+      content: "",
+    })
+    const second = await createDraft(client.db, {
+      questionId,
+      ownerId: OWNER_A,
+      title: "Opening",
+      content: "idea",
+    })
     expect(first.ok).toBe(true)
     if (first.ok) {
+      expect(first.draft.title).toBeNull()
       expect(first.draft.content).toBe("")
+      expect(first.draft.position).toBe(0)
     }
     expect(second.ok).toBe(true)
-    const [{ count }] = (await client.db.execute(
-      sql`select count(*)::int as count from drafts where question_id = ${questionId}`,
-    )) as unknown as { count: number }[]
-    expect(count).toBe(1)
-    const [row] = (await client.db.execute(
-      sql`select content from drafts where question_id = ${questionId}`,
-    )) as unknown as { content: string }[]
-    expect(row.content).toBe("idea")
+    if (second.ok) {
+      expect(second.draft.position).toBe(1)
+    }
+    const listed = await listDrafts(client.db, { questionId, ownerId: OWNER_A })
+    expect(listed.ok && listed.drafts.map((d) => d.title)).toEqual([null, "Opening"])
   })
 
-  it("reports a missing question instead of an FK violation", async () => {
-    const result = await upsertDraft(client.db, { questionId: randomUUID(), content: "x" })
-    expect(result).toEqual({ ok: false, reason: "question_not_found" })
+  it("rejects foreign owners and missing questions", async () => {
+    const { questionId } = await seedOwnerWithTopicAndQuestion()
+    expect(
+      await createDraft(client.db, { questionId, ownerId: OWNER_B, title: null, content: "x" }),
+    ).toEqual({ ok: false, reason: "owner_mismatch" })
+    expect(
+      await createDraft(client.db, {
+        questionId: randomUUID(),
+        ownerId: OWNER_A,
+        title: null,
+        content: "x",
+      }),
+    ).toEqual({ ok: false, reason: "question_not_found" })
+  })
+
+  it("updates fields partially; title null clears while omitted keeps", async () => {
+    const { questionId } = await seedOwnerWithTopicAndQuestion()
+    const created = await createDraft(client.db, {
+      questionId,
+      ownerId: OWNER_A,
+      title: "Keep me?",
+      content: "v1",
+    })
+    if (!created.ok) throw new Error("seed failed")
+    const cleared = await updateDraft(client.db, {
+      draftId: created.draft.id,
+      ownerId: OWNER_A,
+      title: null,
+    })
+    expect(cleared.ok && cleared.draft.title).toBeNull()
+    expect(cleared.ok && cleared.draft.content).toBe("v1")
+    const updated = await updateDraft(client.db, {
+      draftId: created.draft.id,
+      ownerId: OWNER_A,
+      content: "v2",
+    })
+    expect(updated.ok && updated.draft.content).toBe("v2")
+    expect(updated.ok && updated.draft.title).toBeNull()
+    expect(
+      await updateDraft(client.db, { draftId: created.draft.id, ownerId: OWNER_B, content: "no" }),
+    ).toEqual({ ok: false, reason: "draft_not_found" })
+  })
+
+  it("deletes one draft of many and leaves siblings untouched", async () => {
+    const { questionId } = await seedOwnerWithTopicAndQuestion()
+    const a = await createDraft(client.db, {
+      questionId,
+      ownerId: OWNER_A,
+      title: null,
+      content: "a",
+    })
+    const b = await createDraft(client.db, {
+      questionId,
+      ownerId: OWNER_A,
+      title: null,
+      content: "b",
+    })
+    if (!a.ok || !b.ok) throw new Error("seed failed")
+    const removed = await deleteDraft(client.db, { draftId: a.draft.id, ownerId: OWNER_A })
+    expect(removed).toEqual({ ok: true, deleted: true })
+    const listed = await listDrafts(client.db, { questionId, ownerId: OWNER_A })
+    expect(listed.ok && listed.drafts.map((d) => d.content)).toEqual(["b"])
+    expect(await deleteDraft(client.db, { draftId: a.draft.id, ownerId: OWNER_A })).toEqual({
+      ok: true,
+      deleted: false,
+    })
   })
 })
 
