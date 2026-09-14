@@ -1,6 +1,8 @@
 "use client"
 
 import {
+  ChevronLeftIcon,
+  ChevronRightIcon,
   CircleAlertIcon,
   CircleStopIcon,
   FlipHorizontalIcon,
@@ -28,6 +30,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -49,8 +52,14 @@ type QuestionSummary = {
   id: string
   prompt: string
   position: number
+  draftedAt: string | null
   topicId: string
   topicTitle: string
+}
+
+type QuestionNavigation = {
+  prev: { id: string; position: number } | null
+  next: { id: string; position: number } | null
 }
 
 const STATUS_LABELS: Record<RecordingState, string> = {
@@ -74,14 +83,35 @@ const NON_TERMINAL_STATES: RecordingState[] = [
 
 export function PracticeWorkspace({
   question,
+  navigation,
   initialDrafts,
   initialRecordings,
 }: {
   question: QuestionSummary
+  navigation: QuestionNavigation
   initialDrafts: DraftView[]
   initialRecordings: RecordingView[]
 }) {
   const pathname = usePathname()
+
+  // ---- Drafted flag (optimistic, mirrors the topic page checkbox) ---------
+  const [drafted, setDrafted] = useState(Boolean(question.draftedAt))
+  const [draftedError, setDraftedError] = useState<string | null>(null)
+
+  async function toggleDrafted(next: boolean) {
+    const previous = drafted
+    setDrafted(next) // optimistic; revert on failure
+    setDraftedError(null)
+    try {
+      await apiFetch(`/api/questions/${question.id}/drafted`, {
+        method: "PUT",
+        body: JSON.stringify({ drafted: next }),
+      })
+    } catch (cause) {
+      setDrafted(previous)
+      setDraftedError(cause instanceof ApiError ? cause.message : "Could not update the drafted flag.")
+    }
+  }
 
   // ---- Recorder state -----------------------------------------------------
   const recorder = useRecorderController()
@@ -227,14 +257,61 @@ export function PracticeWorkspace({
         <span className="text-foreground">Question {question.position + 1}</span>
       </nav>
 
+      <div className="mb-4 flex items-center justify-between gap-2">
+        {navigation.prev ? (
+          <Button
+            variant="outline"
+            size="sm"
+            render={<Link href={`/practice/questions/${navigation.prev.id}`} />}
+          >
+            <ChevronLeftIcon aria-hidden />
+            Question {navigation.prev.position + 1}
+          </Button>
+        ) : (
+          <Button variant="outline" size="sm" disabled>
+            <ChevronLeftIcon aria-hidden />
+            Previous
+          </Button>
+        )}
+        <span className="text-muted-foreground text-sm tabular-nums">
+          {question.position + 1}
+        </span>
+        {navigation.next ? (
+          <Button
+            variant="outline"
+            size="sm"
+            render={<Link href={`/practice/questions/${navigation.next.id}`} />}
+          >
+            Question {navigation.next.position + 1}
+            <ChevronRightIcon aria-hidden />
+          </Button>
+        ) : (
+          <Button variant="outline" size="sm" disabled>
+            Next
+            <ChevronRightIcon aria-hidden />
+          </Button>
+        )}
+      </div>
+
       <div className="grid gap-6 lg:grid-cols-2">
         <section aria-label="Question and draft" className="flex flex-col gap-4">
           <Card>
-            <CardHeader>
+            <CardHeader className="flex-row items-center justify-between">
               <CardTitle className="text-lg font-semibold">Question</CardTitle>
+              <label className="flex items-center gap-2 text-sm font-normal">
+                <Checkbox
+                  aria-label="Mark this question as drafted"
+                  checked={drafted}
+                  onCheckedChange={(checked) => void toggleDrafted(checked === true)}
+                />
+                Drafted
+              </label>
             </CardHeader>
             <CardContent>
               <p className="whitespace-pre-wrap text-sm">{question.prompt}</p>
+              {draftedError ? (
+                <p className="text-destructive mt-2 text-xs">{draftedError}</p>
+              ) : null}
             </CardContent>
           </Card>
 

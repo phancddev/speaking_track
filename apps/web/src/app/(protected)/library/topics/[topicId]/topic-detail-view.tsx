@@ -7,7 +7,6 @@ import {
   PencilIcon,
   Trash2Icon,
   UserRoundIcon,
-  VideoIcon,
 } from "lucide-react"
 import Link from "next/link"
 import { useState } from "react"

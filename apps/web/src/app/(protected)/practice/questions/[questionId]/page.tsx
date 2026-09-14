@@ -37,7 +37,7 @@ export default async function PracticePage({
   if (!row) {
     notFound()
   }
-  const [questionDrafts, recordings] = await Promise.all([
+  const [questionDrafts, recordings, siblings] = await Promise.all([
     db
       .select({
         id: drafts.id,
@@ -49,15 +49,29 @@ export default async function PracticePage({
       .where(eq(drafts.questionId, questionId))
       .orderBy(asc(drafts.position), asc(drafts.updatedAt)),
     listRecordingsForQuestion(db, { ownerId, questionId }),
+    db
+      .select({ id: questions.id, position: questions.position })
+      .from(questions)
+      .where(and(eq(questions.topicId, row.question.topicId), isNull(questions.deletedAt)))
+      .orderBy(asc(questions.position)),
   ])
+  const index = siblings.findIndex((question) => question.id === questionId)
   return (
     <PracticeWorkspace
       question={{
         id: row.question.id,
         prompt: row.question.prompt,
         position: row.question.position,
+        draftedAt: row.question.draftedAt?.toISOString() ?? null,
         topicId: row.topic.id,
         topicTitle: row.topic.title,
+      }}
+      navigation={{
+        prev: index > 0 ? { id: siblings[index - 1]!.id, position: siblings[index - 1]!.position } : null,
+        next:
+          index >= 0 && index < siblings.length - 1
+            ? { id: siblings[index + 1]!.id, position: siblings[index + 1]!.position }
+            : null,
       }}
       initialDrafts={questionDrafts}
       initialRecordings={recordings}
