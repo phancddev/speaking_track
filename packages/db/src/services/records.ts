@@ -1,15 +1,7 @@
 import { and, asc, eq, sql } from "drizzle-orm"
 import type { SupportedRecordingMimeType } from "@speaking-track/contracts"
-import type { DbExecutor } from "../client"
-import {
-  drafts,
-  recordings,
-  tags,
-  topics,
-  topicTags,
-  type Draft,
-  type Recording,
-} from "../schema"
+import type { Db, DbExecutor } from "../client"
+import { drafts, recordings, tags, topics, topicTags, type Draft, type Recording } from "../schema"
 
 /**
  * Owner-invariant repository primitives shared by the feature services.
@@ -269,4 +261,56 @@ export async function deleteDraft(
     returning d.id
   `)
   return { ok: true, deleted: Boolean((deleted as unknown as { id: string }[]).length) }
+}
+
+export type DraftReorderResult =
+  | { ok: true; drafts: Draft[] }
+  | { ok: false; reason: "question_not_found" | "owner_mismatch" | "draft_order_invalid" }
+
+/**
+ * Reorders a question's drafts: positions are rewritten densely 0..n-1 in
+ * the given order. The order must list every draft of the question exactly
+ * once; anything else fails without partial updates.
+ */
+export async function reorderDrafts(
+  db: Db,
+  input: { questionId: string; ownerId: string; orderedDraftIds: string[] },
+): Promise<DraftReorderResult> {
+  const owned = await db.execute(sql`
+    select d.id
+    from drafts d
+    join questions q on q.id = d.question_id
+    join topics t on t.id = q.topic_id
+    where d.question_id = ${input.questionId}
+      and q.deleted_at is null
+      and t.deleted_at is null
+      and t.owner_id = ${input.ownerId}
+    limit 1
+  `)
+  if (!(owned as unknown as { id: string }[]).length) {
+    return { ok: false, reason: "question_not_found" }
+  }
+
+  const current = await db
+    .select({ id: drafts.id })
+    .from(drafts)
+    .where(eq(drafts.questionId, input.questionId))
+  const currentIds = new Set(current.map((row) => row.id))
+  const ordered = [...new Set(input.orderedDraftIds)]
+  const duplicates = input.orderedDraftIds.length !== new Set(input.orderedDraftIds).size
+  const missing = [...currentIds].filter((id) => !ordered.includes(id))
+  const foreign = ordered.filter((id) => !currentIds.has(id))
+  if (duplicates || missing.length > 0 || foreign.length > 0) {
+    return { ok: false, reason: "draft_order_invalid" }
+  }
+
+  await db.transaction(async (tx) => {
+    for (let index = 0; index < ordered.length; index += 1) {
+      await tx
+        .update(drafts)
+        .set({ position: index })
+        .where(and(eq(drafts.id, ordered[index]!), eq(drafts.questionId, input.questionId)))
+    }
+  })
+  return listDrafts(db, input)
 }

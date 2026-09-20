@@ -1,7 +1,14 @@
 "use client"
 
 import { useCallback, useState } from "react"
-import { CircleAlertIcon, LoaderCircleIcon, PlusIcon, Trash2Icon } from "lucide-react"
+import {
+  ArrowDownIcon,
+  ArrowUpIcon,
+  CircleAlertIcon,
+  LoaderCircleIcon,
+  PlusIcon,
+  Trash2Icon,
+} from "lucide-react"
 import { apiFetch, ApiError } from "@/lib/api-client"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -46,6 +53,7 @@ export function DraftsPanel({
   const [editContent, setEditContent] = useState("")
   const [savingId, setSavingId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [moving, setMoving] = useState(false)
 
   const message = (cause: unknown, fallback: string) =>
     cause instanceof ApiError ? cause.message : fallback
@@ -142,6 +150,38 @@ export function DraftsPanel({
     [closeEdit, deletingId, editingId],
   )
 
+  // Optimistic swap; the server rewrites positions densely and the response
+  // list becomes the new truth. Failures revert and surface the error.
+  const moveDraft = useCallback(
+    async (index: number, direction: -1 | 1) => {
+      const target = index + direction
+      if (target < 0 || target >= items.length || moving) return
+      const previous = items
+      const next = [...items]
+      const [moved] = next.splice(index, 1)
+      next.splice(target, 0, moved!)
+      setItems(next)
+      setMoving(true)
+      setError(null)
+      try {
+        const response = await apiFetch<{ drafts: DraftView[] }>(
+          `/api/questions/${questionId}/drafts/reorder`,
+          {
+            method: "PUT",
+            body: JSON.stringify({ draftIds: next.map((draft) => draft.id) }),
+          },
+        )
+        setItems(response.drafts)
+      } catch (cause) {
+        setItems(previous)
+        setError(cause instanceof ApiError ? cause.message : "Could not reorder drafts.")
+      } finally {
+        setMoving(false)
+      }
+    },
+    [items, moving, questionId],
+  )
+
   return (
     <Card>
       <CardHeader className="flex-row items-center justify-between">
@@ -215,7 +255,7 @@ export function DraftsPanel({
         ) : null}
 
         <ul className="flex flex-col gap-4">
-          {items.map((draft) => {
+          {items.map((draft, index) => {
             const editing = editingId === draft.id
             return (
               <li key={draft.id} className="rounded-lg border p-3">
@@ -285,6 +325,32 @@ export function DraftsPanel({
                         Updated {new Date(draft.updatedAt).toLocaleString()}
                       </span>
                       <div className="flex gap-1">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          aria-label={
+                            draft.title
+                              ? `Move draft ${draft.title} up`
+                              : `Move draft ${index + 1} up`
+                          }
+                          disabled={index === 0 || moving}
+                          onClick={() => void moveDraft(index, -1)}
+                        >
+                          <ArrowUpIcon aria-hidden />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          aria-label={
+                            draft.title
+                              ? `Move draft ${draft.title} down`
+                              : `Move draft ${index + 1} down`
+                          }
+                          disabled={index === items.length - 1 || moving}
+                          onClick={() => void moveDraft(index, 1)}
+                        >
+                          <ArrowDownIcon aria-hidden />
+                        </Button>
                         <Button size="sm" variant="ghost" onClick={() => beginEdit(draft)}>
                           Edit
                         </Button>
