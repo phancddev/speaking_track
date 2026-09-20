@@ -1,6 +1,13 @@
 "use client"
 
-import { CirclePlusIcon, TagsIcon, Trash2Icon, UserRoundIcon } from "lucide-react"
+import {
+  ArrowDownIcon,
+  ArrowUpIcon,
+  CirclePlusIcon,
+  TagsIcon,
+  Trash2Icon,
+  UserRoundIcon,
+} from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useEffect, useMemo, useRef, useState } from "react"
@@ -35,8 +42,10 @@ import { Skeleton } from "@/components/ui/skeleton"
 
 /**
  * Library surface (plan/03 § Library): search, multi-tag intersection
- * filter, removable filter badges, tag management, and topic CRUD. Filter
- * state lives in URL search params so refresh/back preserves the view.
+ * filter, removable filter badges, tag management, topic CRUD, and manual
+ * topic ordering (up/down move buttons; hidden while filters are active
+ * because reordering needs the complete owned set). Filter state lives in
+ * URL search params so refresh/back preserves the view.
  */
 export function LibraryView({
   initialQuery,
@@ -55,6 +64,8 @@ export function LibraryView({
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>(initialTagIds)
   const [tagsDialogOpen, setTagsDialogOpen] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
+  const [reordering, setReordering] = useState(false)
+  const [reorderError, setReorderError] = useState<string | null>(null)
   const library = useLibraryData(query, selectedTagIds, ownerId)
   const { topics, tags } = library.data ?? { topics: [], tags: [] }
   const loading = library.loading
@@ -79,6 +90,31 @@ export function LibraryView({
     }
     router.replace(next ? `/library?${next}` : "/library", { scroll: false })
   }, [query, selectedTagIds, ownerId, router])
+
+  // Reordering needs the complete owned set; filtered views are subsets,
+  // so move buttons only render on the unfiltered list.
+  const filtersActive = query.trim().length > 0 || selectedTagIds.length > 0
+
+  async function reorderTopic(index: number, direction: -1 | 1) {
+    const target = index + direction
+    if (target < 0 || target >= topics.length || reordering) return
+    const next = [...topics]
+    const [moved] = next.splice(index, 1)
+    next.splice(target, 0, moved!)
+    setReordering(true)
+    setReorderError(null)
+    try {
+      await apiFetch(withOwner("/api/topics/reorder", ownerId), {
+        method: "PUT",
+        body: JSON.stringify({ topicIds: next.map((topic) => topic.id) }),
+      })
+      library.reload()
+    } catch (cause) {
+      setReorderError(cause instanceof ApiError ? cause.message : "Could not reorder topics.")
+    } finally {
+      setReordering(false)
+    }
+  }
 
   const tagsById = useMemo(() => new Map(tags.map((tag) => [tag.id, tag])), [tags])
 
@@ -186,6 +222,12 @@ export function LibraryView({
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       ) : null}
+      {reorderError ? (
+        <Alert variant="destructive" className="mt-6">
+          <AlertTitle>Could not reorder topics</AlertTitle>
+          <AlertDescription>{reorderError}</AlertDescription>
+        </Alert>
+      ) : null}
 
       <Separator className="my-6" />
 
@@ -202,7 +244,7 @@ export function LibraryView({
         </p>
       ) : (
         <ul className="flex flex-col gap-3">
-          {topics.map((topic) => (
+          {topics.map((topic, index) => (
             <li key={topic.id}>
               <Card className="py-4 transition-colors hover:bg-muted/40">
                 <CardHeader>
@@ -223,12 +265,36 @@ export function LibraryView({
                         ? "1 question"
                         : `${topic.questionCount} questions`}
                     </Badge>
-                    <DeleteTopicButton
-                      topicId={topic.id}
-                      title={topic.title}
-                      ownerId={ownerId}
-                      onDeleted={() => library.reload()}
-                    />
+                    <div className="flex items-center gap-1">
+                      {!filtersActive ? (
+                        <>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            aria-label={`Move topic ${index + 1} up`}
+                            disabled={index === 0 || reordering}
+                            onClick={() => void reorderTopic(index, -1)}
+                          >
+                            <ArrowUpIcon aria-hidden />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            aria-label={`Move topic ${index + 1} down`}
+                            disabled={index === topics.length - 1 || reordering}
+                            onClick={() => void reorderTopic(index, 1)}
+                          >
+                            <ArrowDownIcon aria-hidden />
+                          </Button>
+                        </>
+                      ) : null}
+                      <DeleteTopicButton
+                        topicId={topic.id}
+                        title={topic.title}
+                        ownerId={ownerId}
+                        onDeleted={() => library.reload()}
+                      />
+                    </div>
                   </CardAction>
                   {topic.tags.length > 0 ? (
                     <div className="flex flex-wrap gap-1.5 pt-1">

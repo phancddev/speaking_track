@@ -36,6 +36,13 @@
       "when": 1789379839704,
       "tag": "0004_question_drafts_multi",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790000000000,
+      "tag": "0005_topic_position",
+      "breakpoints": true
     }
   ]
 }

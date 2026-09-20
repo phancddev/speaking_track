@@ -199,13 +199,17 @@ export const topics = pgTable(
       .references(() => user.id, { onDelete: "cascade" }),
     title: text("title").notNull(),
     description: text("description"),
+    /** Non-negative integer for the manual library card order. */
+    position: integer("position").notNull().default(0),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     ...timestamps,
   },
   (table) => [
     index("topics_owner_id_idx").on(table.ownerId),
+    index("topics_owner_position_idx").on(table.ownerId, table.position),
     check("topics_title_length_check", charLengthBetween("title", 1, 160)),
     check("topics_description_length_check", charLengthAtMost("description", 5000)),
+    check("topics_position_nonnegative_check", sql.raw("position >= 0")),
   ],
 )
 

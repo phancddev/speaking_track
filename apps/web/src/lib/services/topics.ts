@@ -69,7 +69,7 @@ export async function listTopics(
     .select()
     .from(topics)
     .where(and(...conditions))
-    .orderBy(asc(topics.title))
+    .orderBy(asc(topics.position), asc(topics.title))
 
   if (!filters.tagIds || filters.tagIds.length === 0) {
     return hydrateTopicList(db, ownerId, topicRows)
@@ -168,7 +168,13 @@ export async function createTopic(
   const topicId = await db.transaction(async (tx) => {
     const [row] = await tx
       .insert(topics)
-      .values({ ownerId, title: input.title, description: input.description ?? null })
+      .values({
+        ownerId,
+        title: input.title,
+        description: input.description ?? null,
+        // New topics append after the current max position.
+        position: await nextTopicPosition(tx, ownerId),
+      })
       .returning({ id: topics.id })
     if (!row) throw new Error("topic insert returned no row")
     if (tagIds.length > 0) {
@@ -217,14 +223,77 @@ export async function updateTopic(
 }
 
 export async function deleteTopic(db: Db, ownerId: string, topicId: string): Promise<void> {
-  const result = await db
-    .update(topics)
-    .set({ deletedAt: new Date(), updatedAt: new Date() })
+  const [existing] = await db
+    .select({ position: topics.position })
+    .from(topics)
     .where(and(eq(topics.id, topicId), eq(topics.ownerId, ownerId), isNull(topics.deletedAt)))
-    .returning({ id: topics.id })
-  if (result.length === 0) {
+    .limit(1)
+  if (!existing) {
     throw new AppError("RESOURCE_NOT_FOUND", "Topic not found.")
   }
+  await db.transaction(async (tx) => {
+    const result = await tx
+      .update(topics)
+      .set({ deletedAt: new Date(), updatedAt: new Date() })
+      .where(and(eq(topics.id, topicId), eq(topics.ownerId, ownerId), isNull(topics.deletedAt)))
+      .returning({ id: topics.id })
+    if (result.length === 0) {
+      throw new AppError("RESOURCE_NOT_FOUND", "Topic not found.")
+    }
+    // Close the gap so positions stay dense and stable.
+    await tx
+      .update(topics)
+      .set({ position: sql`${topics.position} - 1`, updatedAt: new Date() })
+      .where(
+        and(
+          eq(topics.ownerId, ownerId),
+          isNull(topics.deletedAt),
+          sql`${topics.position} > ${existing.position}`,
+        ),
+      )
+  })
+}
+
+export async function reorderTopics(
+  db: Db,
+  ownerId: string,
+  orderedTopicIds: string[],
+): Promise<TopicListItem[]> {
+  const current = await db
+    .select({ id: topics.id })
+    .from(topics)
+    .where(and(eq(topics.ownerId, ownerId), isNull(topics.deletedAt)))
+  const currentIds = new Set(current.map((row) => row.id))
+  const ordered = [...new Set(orderedTopicIds)]
+
+  const duplicates = orderedTopicIds.length !== new Set(orderedTopicIds).size
+  const missing = [...currentIds].filter((id) => !ordered.includes(id))
+  const foreign = ordered.filter((id) => !currentIds.has(id))
+  if (duplicates || missing.length > 0 || foreign.length > 0) {
+    throw new AppError(
+      "VALIDATION_FAILED",
+      "Topic order must list every library topic exactly once.",
+      {
+        fieldErrors: {
+          topicIds: [
+            duplicates ? "Duplicate topic IDs are not allowed." : "",
+            foreign.length > 0 ? "Some topics do not belong to this library." : "",
+            missing.length > 0 ? "Some library topics are missing from the order." : "",
+          ].filter(Boolean),
+        },
+      },
+    )
+  }
+
+  await db.transaction(async (tx) => {
+    for (let index = 0; index < ordered.length; index += 1) {
+      await tx
+        .update(topics)
+        .set({ position: index, updatedAt: new Date() })
+        .where(and(eq(topics.id, ordered[index]!), eq(topics.ownerId, ownerId)))
+    }
+  })
+  return listTopics(db, ownerId, {})
 }
 
 export async function listQuestions(
@@ -452,6 +521,13 @@ async function nextPosition(db: DbExecutor, topicId: string): Promise<number> {
   return (row?.max ?? -1) + 1
 }
 
+async function nextTopicPosition(db: DbExecutor, ownerId: string): Promise<number> {
+  const [row] = await db
+    .select({ max: sql<number | null>`max(${topics.position})` })
+    .from(topics)
+    .where(and(eq(topics.ownerId, ownerId), isNull(topics.deletedAt)))
+  return (row?.max ?? -1) + 1
+}
 function toQuestionView(row: Question): QuestionListItem {
   // Bare-row view: correct for freshly created questions (no recordings
   // yet); update/draft paths override the count with the live value.
