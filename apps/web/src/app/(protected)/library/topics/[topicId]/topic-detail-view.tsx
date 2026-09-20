@@ -35,8 +35,8 @@ import { Textarea } from "@/components/ui/textarea"
 
 /**
  * Topic detail (plan/03 § Topic detail): metadata/tags, ordered questions
- * with keyboard up/down reordering, add/edit/delete, and a practice link
- * per question.
+ * with up/down reordering, add/edit/delete, a practice link per question,
+ * and per-question recording counts.
  */
 export function TopicDetailView({
   initialTopic,
@@ -213,6 +213,11 @@ export function TopicDetailView({
                     </span>
                   </CardTitle>
                   <div className="flex flex-wrap items-center gap-1">
+                    <span className="text-muted-foreground mr-1 text-sm">
+                      {question.recordingCount === 1
+                        ? "1 recording"
+                        : `${question.recordingCount} recordings`}
+                    </span>
                     <Button
                       variant="ghost"
                       size="icon"

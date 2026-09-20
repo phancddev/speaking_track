@@ -218,6 +218,11 @@ export function LibraryView({
                     {topic.description ?? "No description"}
                   </CardDescription>
                   <CardAction className="flex flex-col items-end gap-2">
+                    <Badge variant="secondary">
+                      {topic.questionCount === 1
+                        ? "1 question"
+                        : `${topic.questionCount} questions`}
+                    </Badge>
                     <DeleteTopicButton
                       topicId={topic.id}
                       title={topic.title}

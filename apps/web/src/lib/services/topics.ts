@@ -307,7 +307,7 @@ export async function updateQuestion(
     .where(and(eq(questions.id, questionId), eq(questions.topicId, existing.topicId)))
     .returning()
   if (!row) throw new Error("question update returned no row")
-  return toQuestionView(row)
+  return { ...toQuestionView(row), recordingCount: await visibleRecordingCount(db, questionId) }
 }
 
 export async function deleteQuestion(db: Db, ownerId: string, questionId: string): Promise<void> {
@@ -417,7 +417,7 @@ export async function setQuestionDrafted(
     .set({ draftedAt: drafted ? new Date() : null, updatedAt: new Date() })
     .where(eq(questions.id, question.id))
     .returning()
-  return toQuestionView(row!)
+  return { ...toQuestionView(row!), recordingCount: await visibleRecordingCount(db, questionId) }
 }
 
 async function loadOwnedQuestion(
@@ -453,8 +453,8 @@ async function nextPosition(db: DbExecutor, topicId: string): Promise<number> {
 }
 
 function toQuestionView(row: Question): QuestionListItem {
-  // Create/update paths return the bare row; a fresh question has no
-  // recordings yet.
+  // Bare-row view: correct for freshly created questions (no recordings
+  // yet); update/draft paths override the count with the live value.
   return {
     id: row.id,
     prompt: row.prompt,
@@ -464,6 +464,23 @@ function toQuestionView(row: Question): QuestionListItem {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   }
+}
+
+/**
+ * Non-hidden recordings for one question; update/draft-toggle responses
+ * carry the live count so client-side replacements stay accurate.
+ */
+async function visibleRecordingCount(db: DbExecutor, questionId: string): Promise<number> {
+  const [row] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(recordings)
+    .where(
+      and(
+        eq(recordings.questionId, questionId),
+        sql`${recordings.status} not in ('DELETE_PENDING', 'DELETED', 'EXPIRED')`,
+      ),
+    )
+  return row?.count ?? 0
 }
 
 function escapeLike(value: string): string {
