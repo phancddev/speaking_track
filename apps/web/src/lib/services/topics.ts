@@ -3,6 +3,7 @@ import { and, asc, eq, ilike, inArray, isNull, sql } from "drizzle-orm"
 import {
   AppError,
   type QuestionCreateInput,
+  type QuestionsBulkCreateInput,
   type QuestionUpdateInput,
   type TopicCreateInput,
   type TopicUpdateInput,
@@ -334,6 +335,23 @@ export async function listQuestions(
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   }))
+}
+
+export async function createQuestions(
+  db: Db,
+  ownerId: string,
+  topicId: string,
+  input: QuestionsBulkCreateInput,
+): Promise<QuestionListItem[]> {
+  await assertOwnedTopic(db, ownerId, topicId)
+  await db.transaction(async (tx) => {
+    // Dense append: positions continue after the current max, in line order.
+    const base = await nextPosition(tx, topicId)
+    await tx
+      .insert(questions)
+      .values(input.prompts.map((prompt, index) => ({ topicId, prompt, position: base + index })))
+  })
+  return listQuestions(db, ownerId, topicId)
 }
 
 export async function createQuestion(

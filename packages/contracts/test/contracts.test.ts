@@ -10,6 +10,7 @@ import {
   JOB_PAYLOAD_SCHEMAS,
   QUEUES,
   QuestionCreateSchema,
+  QuestionsBulkCreateSchema,
   RECORDING_MIME_EXTENSION,
   RECORDING_OBJECT_KEY_PATTERN,
   RECORDING_TRANSITIONS,
@@ -202,6 +203,20 @@ describe("DTO bounds", () => {
     expect(QuestionCreateSchema.safeParse({ prompt: "p", position: 0 }).success).toBe(true)
     expect(QuestionCreateSchema.safeParse({ prompt: "p", position: -1 }).success).toBe(false)
     expect(QuestionCreateSchema.safeParse({ prompt: "p", position: 1.5 }).success).toBe(false)
+  })
+
+  it("bulk questions: 1-200 non-empty prompts", () => {
+    expect(QuestionsBulkCreateSchema.safeParse({ prompts: ["A", " B "] }).success).toBe(true)
+    expect(QuestionsBulkCreateSchema.parse({ prompts: ["A", " B "] }).prompts).toEqual(["A", "B"])
+    expect(QuestionsBulkCreateSchema.safeParse({ prompts: [] }).success).toBe(false)
+    expect(QuestionsBulkCreateSchema.safeParse({ prompts: [""] }).success).toBe(false)
+    expect(QuestionsBulkCreateSchema.safeParse({ prompts: ["p".repeat(5001)] }).success).toBe(false)
+    expect(QuestionsBulkCreateSchema.safeParse({ prompts: Array(201).fill("p") }).success).toBe(
+      false,
+    )
+    expect(QuestionsBulkCreateSchema.safeParse({ prompts: Array(200).fill("p") }).success).toBe(
+      true,
+    )
   })
 
   it("draft create: content max 100000, blank titles normalize to null", () => {

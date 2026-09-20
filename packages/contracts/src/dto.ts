@@ -98,9 +98,15 @@ export const QuestionUpdateSchema = z
     message: "at least one of prompt or position must be supplied",
   })
 
+/** Bulk question creation: each entry becomes one question, appended in order. */
+export const QuestionsBulkCreateSchema = z.strictObject({
+  prompts: z.array(z.string().trim().min(1).max(5000)).min(1).max(200),
+})
+
 export type QuestionCreateInput = z.infer<typeof QuestionCreateSchema>
 export type QuestionUpdateInput = z.infer<typeof QuestionUpdateSchema>
 
+export type QuestionsBulkCreateInput = z.infer<typeof QuestionsBulkCreateSchema>
 /** Optional draft label; empty strings normalize to null. */
 const draftTitle = z
   .string()

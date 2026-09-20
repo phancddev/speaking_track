@@ -4,6 +4,7 @@ import {
   ArrowDownIcon,
   ArrowUpIcon,
   CirclePlusIcon,
+  ListPlusIcon,
   PencilIcon,
   Trash2Icon,
   UserRoundIcon,
@@ -35,8 +36,9 @@ import { Textarea } from "@/components/ui/textarea"
 
 /**
  * Topic detail (plan/03 § Topic detail): metadata/tags, ordered questions
- * with up/down reordering, add/edit/delete, a practice link per question,
- * and per-question recording counts.
+ * with up/down reordering, single and bulk (one per line) add,
+ * edit/delete, a practice link per question, and per-question recording
+ * counts.
  */
 export function TopicDetailView({
   initialTopic,
@@ -181,13 +183,20 @@ export function TopicDetailView({
 
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">Questions</h2>
-        <AddQuestionButton
-          topicId={topic.id}
-          ownerId={ownerId}
-          onAdded={(question) =>
-            setTopic((current) => ({ ...current, questions: [...current.questions, question] }))
-          }
-        />
+        <div className="flex gap-2">
+          <BulkAddQuestionsButton
+            topicId={topic.id}
+            ownerId={ownerId}
+            onAdded={(questions) => setTopic((current) => ({ ...current, questions }))}
+          />
+          <AddQuestionButton
+            topicId={topic.id}
+            ownerId={ownerId}
+            onAdded={(question) =>
+              setTopic((current) => ({ ...current, questions: [...current.questions, question] }))
+            }
+          />
+        </div>
       </div>
 
       {topic.questions.length === 0 ? (
@@ -369,6 +378,107 @@ function AddQuestionButton({
             </Button>
             <Button type="submit" disabled={pending || prompt.trim().length === 0}>
               {pending ? "Adding…" : "Add question"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function BulkAddQuestionsButton({
+  topicId,
+  ownerId,
+  onAdded,
+}: {
+  topicId: string
+  ownerId?: string | null
+  onAdded: (questions: QuestionListItem[]) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [text, setText] = useState("")
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // One non-empty line = one question; blank lines are ignored.
+  const prompts = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+  const tooMany = prompts.length > 200
+
+  async function onSubmit(event: React.FormEvent) {
+    event.preventDefault()
+    if (pending || prompts.length === 0 || tooMany) return
+    setPending(true)
+    setError(null)
+    try {
+      const questions = await apiFetch<QuestionListItem[]>(
+        withOwner(`/api/topics/${topicId}/questions/bulk`, ownerId),
+        {
+          method: "POST",
+          body: JSON.stringify({ prompts }),
+        },
+      )
+      onAdded(questions)
+      setOpen(false)
+      setText("")
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not add the questions.")
+    } finally {
+      setPending(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger render={<Button variant="outline" />}>
+        <ListPlusIcon aria-hidden />
+        Add many
+      </DialogTrigger>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Add many questions</DialogTitle>
+          <DialogDescription>
+            One question per line. Blank lines are ignored; questions are appended to the end of the
+            list in the order shown.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={onSubmit} className="flex flex-col gap-4">
+          <div className="grid gap-2">
+            <Label htmlFor="bulk-questions">Questions</Label>
+            <Textarea
+              id="bulk-questions"
+              value={text}
+              onChange={(event) => setText(event.target.value)}
+              rows={10}
+              autoFocus
+              placeholder={
+                "Do you collect things?\nWhat items are collectibles?\nWhy do people collect?"
+              }
+            />
+          </div>
+          <p className="text-muted-foreground text-sm">
+            {prompts.length === 1
+              ? "1 question will be added"
+              : `${prompts.length} questions will be added`}
+          </p>
+          {error ? (
+            <Alert variant="destructive">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          ) : null}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setOpen(false)}
+              disabled={pending}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={pending || prompts.length === 0 || tooMany}>
+              {pending ? "Adding…" : "Add questions"}
             </Button>
           </DialogFooter>
         </form>
